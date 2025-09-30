@@ -4,14 +4,30 @@ This module provides centralized configuration management using Pydantic Setting
 for environment variables and application configuration.
 """
 
-from typing import List, Optional
-
-from pydantic import Field, field_validator
+from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 class Settings(BaseSettings):
-    """Application settings loaded from environment variables."""
+    """Application settings loaded from environment variables.
+    
+    This class manages all configuration settings for the WebToNotion application,
+    loading values from environment variables and .env files.
+    
+    Attributes:
+        notion_api_key: Notion API integration token for database operations
+        logfire_token: Logfire authentication token for monitoring and logging
+        api_key: Optional API key for securing the application endpoints
+        rate_limit_requests: Maximum number of requests per minute per IP
+        rate_limit_window: Time window for rate limiting in seconds
+        cors_origins: List of allowed CORS origins
+        debug: Enable debug mode for development
+        environment: Application environment (development, staging, production)
+        max_content_length: Maximum content length for video processing
+        request_timeout: Request timeout in seconds
+        cache_ttl: Cache time-to-live in seconds
+        background_task_timeout: Background task timeout in seconds
+    """
 
     model_config = SettingsConfigDict(
         env_file=".env",
@@ -20,106 +36,77 @@ class Settings(BaseSettings):
         extra="ignore",
     )
 
-    # Application Settings
-    app_name: str = Field(default="WebToNotion", description="Application name")
-    app_version: str = Field(default="0.1.0", description="Application version")
-    debug: bool = Field(default=False, description="Debug mode")
-    log_level: str = Field(default="INFO", description="Logging level")
-
-    # Server Configuration
-    host: str = Field(default="0.0.0.0", description="Server host")
-    port: int = Field(default=8000, description="Server port")
-
-    # Notion API Configuration
+    # Core API Configuration
     notion_api_key: str = Field(
         ..., description="Notion API integration token", min_length=1
     )
-    notion_version: str = Field(
-        default="2022-06-28", description="Notion API version"
+    
+    logfire_token: str = Field(
+        ..., description="Logfire authentication token", min_length=1
+    )
+    
+    api_key: str | None = Field(
+        default=None, description="API key for securing the API"
     )
 
-    # Logfire Configuration
-    logfire_token: Optional[str] = Field(
-        default=None, description="Logfire authentication token"
-    )
-    logfire_project_name: str = Field(
-        default="webtonotion", description="Logfire project name"
-    )
-
-    # Web Scraping Configuration
-    user_agent: str = Field(
-        default="WebToNotion/0.1.0 (https://github.com/MichalKus/WebToNotion)",
-        description="User agent for web requests",
-    )
-    request_timeout: int = Field(
-        default=30, description="HTTP request timeout in seconds", ge=1, le=300
-    )
-    max_retries: int = Field(
-        default=3, description="Maximum number of request retries", ge=0, le=10
-    )
-
-    # Playwright Configuration
-    playwright_headless: bool = Field(
-        default=True, description="Run Playwright in headless mode"
-    )
-    playwright_timeout: int = Field(
-        default=30000, description="Playwright timeout in milliseconds", ge=1000
-    )
-
-    # Rate Limiting
+    # Rate Limiting Configuration
     rate_limit_requests: int = Field(
-        default=100, description="Number of requests per window", ge=1
+        default=60, description="Maximum requests per minute per IP", ge=1
     )
+    
     rate_limit_window: int = Field(
-        default=3600, description="Rate limit window in seconds", ge=1
+        default=60, description="Rate limit time window in seconds", ge=1
     )
 
-    # Security
-    secret_key: str = Field(
-        ..., description="Secret key for security operations", min_length=32
-    )
-    allowed_hosts: List[str] = Field(
-        default=["localhost", "127.0.0.1"], description="Allowed hosts"
+    # CORS Configuration
+    cors_origins: list[str] = Field(
+        default_factory=lambda: ["*"], 
+        description="Allowed CORS origins"
     )
 
-    @field_validator("log_level")
-    @classmethod
-    def validate_log_level(cls, v: str) -> str:
-        """Validate log level is one of the standard levels."""
-        valid_levels = {"DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"}
-        if v.upper() not in valid_levels:
-            raise ValueError(f"Log level must be one of: {', '.join(valid_levels)}")
-        return v.upper()
+    # Application Configuration
+    debug: bool = Field(
+        default=False, description="Enable debug mode"
+    )
+    
+    environment: str = Field(
+        default="development", 
+        description="Application environment (development, staging, production)"
+    )
 
-    @field_validator("allowed_hosts", mode="before")
-    @classmethod
-    def parse_allowed_hosts(cls, v) -> List[str]:
-        """Parse allowed hosts from comma-separated string or list."""
-        if isinstance(v, str):
-            return [host.strip() for host in v.split(",") if host.strip()]
-        return v
+    # Processing Configuration
+    max_content_length: int = Field(
+        default=100 * 1024 * 1024,  # 100MB
+        description="Maximum content length for video processing in bytes",
+        ge=1024
+    )
+    
+    request_timeout: int = Field(
+        default=300, description="Request timeout in seconds", ge=1
+    )
+    
+    background_task_timeout: int = Field(
+        default=600, description="Background task timeout in seconds", ge=1
+    )
 
-    @property
-    def is_development(self) -> bool:
-        """Check if application is running in development mode."""
-        return self.debug
+    # Caching Configuration
+    cache_ttl: int = Field(
+        default=3600, description="Cache time-to-live in seconds", ge=0
+    )
 
-    @property
-    def is_production(self) -> bool:
-        """Check if application is running in production mode."""
-        return not self.debug
-
-    def get_database_url(self) -> str:
-        """Get database URL (placeholder for future database integration)."""
-        # This is a placeholder for future database configuration
-        return "sqlite:///./webtonotion.db"
-
-    class Config:
-        """Pydantic configuration."""
-
-        env_file = ".env"
-        case_sensitive = False
+    # Server Configuration
+    host: str = Field(
+        default="0.0.0.0", description="Server host address"
+    )
+    
+    port: int = Field(
+        default=8000, description="Server port", ge=1, le=65535
+    )
+    
+    workers: int = Field(
+        default=1, description="Number of worker processes", ge=1
+    )
 
 
-# Global settings instance
+# Global instance of the settings
 settings = Settings()
