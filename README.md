@@ -1,159 +1,201 @@
 # WebToNotion
 
-A web scraping tool that converts web content to Notion pages using FastAPI and modern Python technologies.
+AI-powered URL processing for Notion integration. A FastAPI application that processes URLs from social media platforms, extracts structured information using AI agents, and intelligently creates Notion pages in appropriate databases.
 
 ## 🚀 Features
 
-- **Web Scraping**: Extract content from web pages with advanced scraping capabilities
-- **Notion Integration**: Seamlessly convert scraped content to Notion pages
-- **FastAPI Backend**: Modern, fast, and async API built with FastAPI
-- **Type Safety**: Full type annotations with mypy support
-- **Modern Python**: Built with Python 3.12+ and latest best practices
-- **Modular Architecture**: Clean, maintainable code structure
+- **AI-Powered Processing**: Uses PydanticAI agents to intelligently analyze content
+- **Social Media Support**: Specialized handling for YouTube, Facebook, and Instagram
+- **Smart Notion Integration**: Automatically selects the most appropriate Notion database
+- **Web Scraping**: Robust content extraction with Playwright for dynamic content
+- **Monitoring & Observability**: Integrated with Logfire for comprehensive monitoring
+- **Modern Architecture**: Built with FastAPI, Pydantic, and async/await patterns
 
-## 🛠️ Technology Stack
+## 🏗️ Architecture
 
-- **Python 3.12+**: Latest Python features and performance improvements
-- **FastAPI**: Modern, fast web framework for building APIs
-- **Pydantic**: Data validation using Python type annotations
-- **SQLAlchemy**: SQL toolkit and Object-Relational Mapping
-- **BeautifulSoup4**: Web scraping and HTML parsing
-- **Uvicorn**: Lightning-fast ASGI server
-- **Pytest**: Testing framework with async support
-- **Ruff**: Fast Python linter and formatter
+The application follows a modular, service-oriented architecture:
 
-## 📋 Requirements
+- **API Layer**: FastAPI endpoints for URL processing
+- **Core Agent**: PydanticAI-powered orchestration logic
+- **Services Layer**: Web scraping, Notion integration, and monitoring services
+- **Models**: Pydantic models for data validation and serialization
+- **Configuration**: Environment-based settings management
 
-- Python 3.12 or higher
-- pip (Python package installer)
+## 📋 Prerequisites
 
-## 🚀 Quick Start
+- Python 3.12+
+- Notion API integration token
+- Logfire account (optional, for monitoring)
 
-### Installation
+## 🛠️ Installation
 
-1. Clone the repository:
-```bash
-git clone https://github.com/MichalKus/WebToNotion.git
-cd WebToNotion
-```
+1. **Clone the repository**:
+   ```bash
+   git clone https://github.com/MichalKus/WebToNotion.git
+   cd WebToNotion
+   ```
 
-2. Create a virtual environment:
-```bash
-python -m venv venv
-source venv/bin/activate  # On Windows: venv\Scripts\activate
-```
+2. **Create a virtual environment**:
+   ```bash
+   python -m venv venv
+   source venv/bin/activate  # On Windows: venv\Scripts\activate
+   ```
 
-3. Install dependencies:
-```bash
-pip install -e .
-```
+3. **Install dependencies**:
+   ```bash
+   pip install -e .
+   ```
 
-4. Install development dependencies (optional):
-```bash
-pip install -e ".[dev]"
-```
+4. **Install development dependencies** (optional):
+   ```bash
+   pip install -e ".[dev]"
+   ```
+
+5. **Install Playwright browsers**:
+   ```bash
+   playwright install
+   ```
+
+## ⚙️ Configuration
+
+1. **Copy the environment template**:
+   ```bash
+   cp .env.example .env
+   ```
+
+2. **Configure your environment variables** in `.env`:
+   ```env
+   # Required
+   NOTION_API_KEY=your_notion_integration_token_here
+   SECRET_KEY=your_secret_key_here_change_in_production
+   
+   # Optional
+   LOGFIRE_TOKEN=your_logfire_token_here
+   DEBUG=true
+   LOG_LEVEL=INFO
+   ```
+
+3. **Set up Notion Integration**:
+   - Go to [Notion Integrations](https://www.notion.so/my-integrations)
+   - Create a new integration
+   - Copy the integration token to your `.env` file
+   - Share your Notion databases with the integration
+
+## 🚀 Usage
 
 ### Running the Application
 
-1. Start the FastAPI server:
+**Development mode**:
 ```bash
-webtonotion
+python -m webtonotion.main
 ```
 
-Or run directly with uvicorn:
+**Production mode**:
 ```bash
-uvicorn webtonotion.main:app --reload
+uvicorn webtonotion.main:create_app --host 0.0.0.0 --port 8000
 ```
 
-2. Open your browser and navigate to:
-   - API Documentation: http://localhost:8000/docs
-   - Alternative Docs: http://localhost:8000/redoc
-   - Health Check: http://localhost:8000/health
+### API Endpoints
+
+#### Process URL
+```http
+POST /api/v1/process-url
+Content-Type: application/json
+
+{
+  "url": "https://www.instagram.com/p/example/"
+}
+```
+
+**Response**:
+```json
+{
+  "status": "success",
+  "message": "Successfully processed and added to Notion.",
+  "notion_page_url": "https://www.notion.so/..."
+}
+```
+
+#### Health Check
+```http
+GET /health
+```
+
+**Response**:
+```json
+{
+  "status": "healthy",
+  "version": "0.1.0",
+  "service": "WebToNotion"
+}
+```
 
 ## 🧪 Testing
 
-Run the test suite:
+**Run all tests**:
 ```bash
 pytest
 ```
 
-Run tests with coverage:
+**Run with coverage**:
 ```bash
-pytest --cov=src --cov-report=html
+pytest --cov=webtonotion --cov-report=html
+```
+
+**Run specific test types**:
+```bash
+# Unit tests only
+pytest tests/unit/
+
+# Integration tests only
+pytest tests/integration/
 ```
 
 ## 🔧 Development
 
 ### Code Quality
 
-This project uses several tools to maintain code quality:
-
-- **Ruff**: For linting and formatting
-- **MyPy**: For type checking
-- **Pytest**: For testing
-
-Run all quality checks:
+**Format code**:
 ```bash
-# Linting and formatting
-ruff check .
-ruff format .
-
-# Type checking
-mypy src
-
-# Tests
-pytest
+black src/ tests/
+isort src/ tests/
 ```
 
-### Project Structure
+**Type checking**:
+```bash
+mypy src/
+```
+
+**Linting**:
+```bash
+flake8 src/ tests/
+```
+
+### Pre-commit Hooks
+
+Install pre-commit hooks for automatic code quality checks:
+```bash
+pre-commit install
+```
+
+## 📁 Project Structure
 
 ```
 WebToNotion/
-├── src/webtonotion/          # Main application code
-│   ├── controllers/          # API route handlers
-│   ├── models/              # Data models
-│   ├── services/            # Business logic
-│   └── utils/               # Utility functions
-├── tests/                   # Test suite
-├── docs/                    # Documentation
-├── config/                  # Configuration files
-└── pyproject.toml          # Project metadata and dependencies
-```
-
-### Branching Strategy
-
-- `main`: Production-ready code
-- `develop`: Integration branch for features
-- `feature/[name]`: Feature development branches
-- `fix/[name]`: Bug fix branches
-
-### Commit Convention
-
-We follow Conventional Commits:
-- `feat:` New features
-- `fix:` Bug fixes
-- `docs:` Documentation changes
-- `style:` Code style changes
-- `refactor:` Code refactoring
-- `test:` Test additions or modifications
-- `chore:` Build process or auxiliary tool changes
-
-## 📝 Configuration
-
-Create a `.env` file in the project root for local development:
-
-```env
-# API Configuration
-API_HOST=0.0.0.0
-API_PORT=8000
-DEBUG=true
-
-# Notion Configuration
-NOTION_API_KEY=your_notion_api_key_here
-NOTION_DATABASE_ID=your_database_id_here
-
-# Database Configuration (if using database)
-DATABASE_URL=sqlite:///./webtonotion.db
+├── src/webtonotion/           # Main application package
+│   ├── api/                   # FastAPI routers and endpoints
+│   ├── core/                  # Core business logic and AI agents
+│   ├── services/              # External service integrations
+│   ├── models/                # Pydantic data models
+│   ├── config/                # Configuration management
+│   └── main.py               # Application entry point
+├── tests/                     # Test suite
+│   ├── unit/                  # Unit tests
+│   └── integration/           # Integration tests
+├── docs/                      # Documentation
+├── pyproject.toml            # Project configuration
+├── .env.example              # Environment variables template
+└── README.md                 # This file
 ```
 
 ## 🤝 Contributing
@@ -161,8 +203,8 @@ DATABASE_URL=sqlite:///./webtonotion.db
 1. Fork the repository
 2. Create a feature branch (`git checkout -b feature/amazing-feature`)
 3. Make your changes
-4. Run tests and quality checks
-5. Commit your changes (`git commit -m 'feat: add amazing feature'`)
+4. Run tests and ensure code quality
+5. Commit your changes (`git commit -m 'Add amazing feature'`)
 6. Push to the branch (`git push origin feature/amazing-feature`)
 7. Open a Pull Request
 
@@ -170,19 +212,16 @@ DATABASE_URL=sqlite:///./webtonotion.db
 
 This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
 
-## 🔗 Links
+## 🆘 Support
 
-- [Repository](https://github.com/MichalKus/WebToNotion)
-- [Issues](https://github.com/MichalKus/WebToNotion/issues)
-- [Documentation](https://github.com/MichalKus/WebToNotion#readme)
+- **Issues**: [GitHub Issues](https://github.com/MichalKus/WebToNotion/issues)
+- **Documentation**: [Project Documentation](docs/)
+- **Discussions**: [GitHub Discussions](https://github.com/MichalKus/WebToNotion/discussions)
 
-## 📞 Support
+## 🙏 Acknowledgments
 
-If you have any questions or need help, please:
-1. Check the [documentation](docs/)
-2. Search existing [issues](https://github.com/MichalKus/WebToNotion/issues)
-3. Create a new issue if needed
-
----
-
-Made with ❤️ by [MichalKus](https://github.com/MichalKus)
+- [FastAPI](https://fastapi.tiangolo.com/) for the excellent web framework
+- [PydanticAI](https://ai.pydantic.dev/) for AI agent capabilities
+- [Notion API](https://developers.notion.com/) for database integration
+- [Playwright](https://playwright.dev/) for web scraping capabilities
+- [Logfire](https://logfire.pydantic.dev/) for monitoring and observability

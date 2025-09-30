@@ -11,21 +11,18 @@ The Core Agent is the heart of the WebToNotion application. It is an AI-powered 
 *   **Data Extraction**: It extracts relevant information from the content (e.g., title, author, location, summary) and maps it to the fields of the chosen Notion database.
 *   **Tool Usage**: The agent will be equipped with a set of tools (services) that it can call to perform specific actions, such as fetching content from a URL or creating a page in Notion.
 
-**3. Agent Logic Flow**
+**3. **Agent Logic Flow**
 
 The agent will follow these steps when processing a URL:
 
 1.  **Receive URL**: The agent is invoked with a URL from the API layer.
-2.  **Fetch Content**: It calls the `VideoScrapingService` to get the content of the web page.
-3.  **Get Notion Databases**: It calls the `NotionService` to get a list of available Notion databases in the user's workspace.
-4.  **Analyze and Decide**: The agent sends the scraped content and the list of databases to the LLM. The prompt will instruct the LLM to:
-    *   Analyze the content to understand its topic and structure.
-    *   Examine the available Notion databases (their names and properties).
-    *   Select the most suitable database for the content.
-    *   Extract the relevant information from the content and map it to the database's properties.
-5.  **Create Notion Page**: The agent calls the `NotionService` with the chosen database ID and the extracted data to create a new page in Notion.
-6.  **Log and Monitor**: Throughout the process, the agent logs key events and decisions to the `MonitoringService`.
-7.  **Return Result**: The agent returns the result of the operation (e.g., the URL of the newly created Notion page) to the API layer.
+2.  **Invoke Video Scraping Service**: It calls the `VideoScrapingService` to get the structured `VideoContent` from the web page.
+3.  **Find Candidate Databases**: The agent uses the `DatabaseSelectionService` to find a small set of the most relevant Notion databases. (See [Database Selection Architecture](database_selection_architecture.md) for details).
+4.  **Select Best Database**: The agent sends the `VideoContent` and the candidate databases to the LLM with a focused prompt that instructs it to analyze the video content and choose the single most appropriate database from the candidates.
+5.  **Map Data to Database Fields**: Once the database is selected, the agent makes a second LLM call with the `VideoContent` and the specific properties/schema of the chosen database. This prompt focuses solely on extracting and mapping the relevant data from the video content to match the database's field structure.
+6.  **Create Notion Page**: The agent calls the `NotionService` with the chosen database ID and the mapped data to create a new page in Notion.
+7.  **Log and Monitor**: Throughout the process, the agent logs key events and decisions to the `MonitoringService`.
+8.  **Return Result**: The agent returns the result of the operation (e.g., the URL of the newly created Notion page) to the API layer.
 
 **4. Implementation Details**
 

@@ -6,13 +6,16 @@ The Services layer contains a collection of independent, reusable components tha
 
 **2. Video Scraping Service (`video_scraping_service.py`)**
 
-*   **Purpose**: This service is responsible for fetching and extracting content from web pages, with a special focus on video platforms like YouTube and Instagram.
+*   **Purpose**: This service is responsible for extracting comprehensive content from video URLs from platforms like YouTube, Instagram, and Facebook.
 *   **Key Functions**:
-    *   `fetch_content(url: str) -> str`: Given a URL, this function will navigate to the page and return its main content. For social media sites, this will require browser automation.
+    *   `process_video(url: str) -> VideoContent`: Given a video URL, this function orchestrates the entire process of downloading, transcribing, and analyzing the video content.
 *   **Implementation Details**:
-    *   This service will use a browser automation library like **Playwright** to handle dynamic, JavaScript-heavy websites.
-    *   It will need to manage browser instances, handle logins (if necessary), and gracefully deal with anti-scraping measures.
-    *   Error handling is critical. The service must be able to handle cases where a page is not found, content is private, or the website structure has changed.
+    *   **Primary Method (`yt-dlp`)**: The service's main strategy is to use the `yt-dlp` library to download the video's audio stream and extract all available metadata (title, description, author, etc.).
+    *   **Audio Transcription**: The downloaded audio is then sent to an external transcription service (e.g., OpenAI Whisper) to get a full text transcript.
+    *   **Content Consolidation**: The video's description (from metadata) and the audio transcript are combined into a single text document for comprehensive analysis.
+    *   **AI Analysis**: This consolidated text is passed to a `pydantic-ai` agent, which extracts structured information (e.g., topics, locations, sentiment) based on a predefined schema.
+    *   **Fallback Mechanism (Playwright)**: If `yt-dlp` fails (e.g., for private content requiring a login), the service will fall back to using **Playwright**. In this mode, it will launch a browser, potentially log in to the platform, and scrape the necessary metadata from the page as a last resort.
+    *   **Error Handling**: The service includes robust error handling to manage failures in `yt-dlp`, the transcription service, or the fallback scraping process.
 
 **3. Notion Integration Service (`notion_service.py`)**
 
@@ -27,7 +30,7 @@ The Services layer contains a collection of independent, reusable components tha
 
 **4. Monitoring Service (`monitoring_service.py`)**
 
-*   **Purpose**: This service provides an abstraction layer for logging and monitoring. It allows the application to send data to a monitoring tool like Langfuse or Logfire without being tightly coupled to a specific implementation.
+*   **Purpose**: This service provides an abstraction layer for logging and monitoring. It allows the application to send data to a monitoring tool like Logfire without being tightly coupled to a specific implementation.
 *   **Key Functions**:
     *   `log_event(event_name: str, data: dict)`: Logs a specific event (e.g., "agent_decision", "notion_page_created") with associated data.
     *   `log_error(error: Exception)`: Logs an error with its stack trace.
