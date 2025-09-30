@@ -81,16 +81,16 @@ class Settings(BaseSettings):
     )
 
     # Core API Configuration
-    notion_api_key: str = Field(
-        ..., description="Notion API integration token", min_length=1
+    notion_api_key: str | None = Field(
+        default=None, description="Notion API integration token"
     )
     
     notion_version: str = Field(
         default="2022-06-28", description="Notion API version to use"
     )
     
-    logfire_token: str = Field(
-        ..., description="Logfire authentication token", min_length=1
+    logfire_token: str | None = Field(
+        default=None, description="Logfire authentication token"
     )
     
     logfire_project_name: str = Field(
@@ -155,7 +155,7 @@ class Settings(BaseSettings):
 
     # Security Configuration
     secret_key: str = Field(
-        ..., 
+        default="dev-secret-key-change-in-production-32chars", 
         description="Secret key for cryptographic operations", 
         min_length=32
     )
