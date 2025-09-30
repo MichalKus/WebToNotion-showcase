@@ -5,36 +5,16 @@ configures middleware, and includes API routers.
 """
 
 import logging
-import sys
 from contextlib import asynccontextmanager
 from typing import AsyncGenerator
 
-import logfire
-import uvicorn
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.trustedhost import TrustedHostMiddleware
 
+from webtonotion.api.middleware import ErrorHandlingMiddleware, RequestLoggingMiddleware
+from webtonotion.config.logging import setup_logging
 from webtonotion.config.settings import settings
-
-
-def setup_logging() -> None:
-    """Configure application logging."""
-    logging.basicConfig(
-        level=getattr(logging, settings.log_level),
-        format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
-        handlers=[
-            logging.StreamHandler(sys.stdout),
-        ],
-    )
-
-    # Configure logfire if token is provided
-    if settings.logfire_token:
-        logfire.configure(
-            token=settings.logfire_token,
-            project_name=settings.logfire_project_name,
-        )
-        logfire.instrument_fastapi()
 
 
 @asynccontextmanager
@@ -42,9 +22,15 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     """Application lifespan manager."""
     # Startup
     logger = logging.getLogger(__name__)
-    logger.info(f"Starting {settings.app_name} v{settings.app_version}")
-    logger.info(f"Debug mode: {settings.debug}")
-    logger.info(f"Log level: {settings.log_level}")
+    logger.info(
+        f"Starting {settings.app_name} v{settings.app_version}",
+        extra={
+            "app_name": settings.app_name,
+            "app_version": settings.app_version,
+            "debug": settings.debug,
+            "environment": settings.environment,
+        }
+    )
 
     # Initialize services here if needed
     # await initialize_services()
@@ -69,7 +55,10 @@ def create_app() -> FastAPI:
         lifespan=lifespan,
     )
 
-    # Add middleware
+    # Add middleware (order matters - first added is outermost)
+    app.add_middleware(ErrorHandlingMiddleware)
+    app.add_middleware(RequestLoggingMiddleware)
+    
     app.add_middleware(
         TrustedHostMiddleware,
         allowed_hosts=settings.allowed_hosts,
@@ -84,34 +73,23 @@ def create_app() -> FastAPI:
     )
 
     # Include API routers
-    # from webtonotion.api.process import router as process_router
-    # app.include_router(process_router, prefix="/api/v1")
-
-    # Health check endpoint
-    @app.get("/health")
-    async def health_check() -> dict[str, str]:
-        """Health check endpoint."""
-        return {
-            "status": "healthy",
-            "version": settings.app_version,
-            "service": settings.app_name,
-        }
+    from webtonotion.api.process import router as process_router
+    from webtonotion.api.health import router as health_router
+    
+    app.include_router(process_router, prefix="/api/v1")
+    app.include_router(health_router, prefix="/api/v1")
 
     return app
 
 
-def main() -> None:
-    """Main entry point for running the application."""
-    app = create_app()
-
+if __name__ == "__main__":
+    import uvicorn
+    
     uvicorn.run(
-        app,
+        "webtonotion.main:create_app",
+        factory=True,
         host=settings.host,
         port=settings.port,
         log_level=settings.log_level.lower(),
         reload=settings.debug,
     )
-
-
-if __name__ == "__main__":
-    main()
