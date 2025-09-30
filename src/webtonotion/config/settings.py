@@ -15,18 +15,53 @@ class Settings(BaseSettings):
     loading values from environment variables and .env files.
     
     Attributes:
+        # Application Metadata
+        app_name: Application name for identification
+        app_version: Application version for tracking
+        
+        # Core API Configuration
         notion_api_key: Notion API integration token for database operations
+        notion_version: Notion API version to use
         logfire_token: Logfire authentication token for monitoring and logging
+        logfire_project_name: Logfire project name for identification
         api_key: Optional API key for securing the application endpoints
+        
+        # Logging Configuration
+        log_level: Logging level for the application
+        
+        # Rate Limiting Configuration
         rate_limit_requests: Maximum number of requests per minute per IP
         rate_limit_window: Time window for rate limiting in seconds
+        
+        # CORS Configuration
         cors_origins: List of allowed CORS origins
+        
+        # Application Configuration
         debug: Enable debug mode for development
         environment: Application environment (development, staging, production)
+        
+        # Web Scraping Configuration
+        user_agent: User agent string for web requests
+        max_retries: Maximum number of retry attempts for failed requests
+        
+        # Playwright Configuration
+        playwright_headless: Run Playwright browser in headless mode
+        playwright_timeout: Playwright operation timeout in milliseconds
+        
+        # Security Configuration
+        secret_key: Secret key for cryptographic operations
+        allowed_hosts: List of allowed host names for security
+        
+        # Processing Configuration
         max_content_length: Maximum content length for video processing
         request_timeout: Request timeout in seconds
         cache_ttl: Cache time-to-live in seconds
         background_task_timeout: Background task timeout in seconds
+        
+        # Server Configuration
+        host: Server host address
+        port: Server port number
+        workers: Number of worker processes
     """
 
     model_config = SettingsConfigDict(
@@ -36,17 +71,40 @@ class Settings(BaseSettings):
         extra="ignore",
     )
 
+    # Application Metadata
+    app_name: str = Field(
+        default="WebToNotion", description="Application name for identification"
+    )
+    
+    app_version: str = Field(
+        default="0.1.0", description="Application version for tracking"
+    )
+
     # Core API Configuration
     notion_api_key: str = Field(
         ..., description="Notion API integration token", min_length=1
+    )
+    
+    notion_version: str = Field(
+        default="2022-06-28", description="Notion API version to use"
     )
     
     logfire_token: str = Field(
         ..., description="Logfire authentication token", min_length=1
     )
     
+    logfire_project_name: str = Field(
+        default="webtonotion", description="Logfire project name for identification"
+    )
+    
     api_key: str | None = Field(
         default=None, description="API key for securing the API"
+    )
+
+    # Logging Configuration
+    log_level: str = Field(
+        default="INFO", 
+        description="Logging level (DEBUG, INFO, WARNING, ERROR, CRITICAL)"
     )
 
     # Rate Limiting Configuration
@@ -72,6 +130,39 @@ class Settings(BaseSettings):
     environment: str = Field(
         default="development", 
         description="Application environment (development, staging, production)"
+    )
+
+    # Web Scraping Configuration
+    user_agent: str = Field(
+        default="WebToNotion/0.1.0 (https://github.com/MichalKus/WebToNotion)",
+        description="User agent string for web requests"
+    )
+    
+    max_retries: int = Field(
+        default=3, description="Maximum retry attempts for failed requests", ge=0
+    )
+
+    # Playwright Configuration
+    playwright_headless: bool = Field(
+        default=True, description="Run Playwright browser in headless mode"
+    )
+    
+    playwright_timeout: int = Field(
+        default=30000, 
+        description="Playwright operation timeout in milliseconds", 
+        ge=1000
+    )
+
+    # Security Configuration
+    secret_key: str = Field(
+        ..., 
+        description="Secret key for cryptographic operations", 
+        min_length=32
+    )
+    
+    allowed_hosts: list[str] = Field(
+        default_factory=lambda: ["localhost", "127.0.0.1"],
+        description="List of allowed host names for security"
     )
 
     # Processing Configuration
