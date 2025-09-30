@@ -34,28 +34,29 @@ The key architectural components will be:
     *   **`core/`**: The central logic of the application.
         *   `agent.py`: Contains the `PydanticAIAgent` responsible for orchestrating the entire process, from scraping to Notion entry creation. It will use tools to interact with other services.
     *   **`services/`**: A collection of services that perform specific tasks.
-        *   `video_scraping_service.py`: A specialized tool for the agent to handle content extraction from video platforms like YouTube and Instagram. This will likely require browser automation (e.g., Playwright) to handle dynamic content and authentication.
+        *   `video_scraping_service.py`: A robust tool for the agent to extract comprehensive content from video URLs. It uses `yt-dlp` to download video/audio and metadata (like descriptions). The audio is then transcribed to text. This service combines the description and transcript, feeding them to a `pydantic-ai` agent for structured data extraction. It maintains Playwright as a fallback for cases where `yt-dlp` fails (e.g., login-required content).
         *   `notion_service.py`: A tool for the agent. It will handle all interactions with the Notion API, such as listing databases and creating pages. It will use the official `notion-client` library.
         *   `monitoring_service.py`: A service to abstract the interaction with the chosen monitoring tool (Langfuse or Logfire), allowing for easy switching if needed.
     *   **`models/`**: Pydantic models for data validation and structuring.
         *   `request.py`: Defines the model for the incoming URL processing request.
         *   `notion.py`: Defines models for Notion databases and pages.
+        *   `video.py`: Defines the `VideoContent` model for structuring extracted video data.
     *   **`config/`**: Configuration management.
         *   `settings.py`: Pydantic-based settings management to load configuration from environment variables (e.g., Notion API key, monitoring service credentials).
 
 *   **Data Model Changes:**
-    *   This is a new application, so there are no changes to existing data models. The primary models will be Pydantic models representing the request payload and the data structures for Notion pages and databases.
+    *   A new `VideoContent` model will be introduced in `models/video.py` to structure the data extracted from videos, including metadata, transcripts, and AI-generated insights.
 
 *   **API Endpoints:**
     *   **`POST /api/v1/process-url`**:
-        *   **Request Body**: `{ "url": "https://example.com/some-article" }`
+        *   **Request Body**: `{ "url": "https://example.com/some-video" }`
         *   **Success Response (200 OK)**: `{ "status": "success", "message": "Successfully processed and added to Notion.", "notion_page_url": "https://www.notion.so/..." }`
         *   **Error Response (4xx/5xx)**: `{ "status": "error", "message": "Detailed error message." }`
 
 *   **Non-Functional Considerations:**
     *   **Security**: API keys and other secrets will be managed via environment variables and a `Pydantic` settings object. The API will include input validation to prevent common vulnerabilities.
     *   **Scalability**: The application will be designed to run in a containerized environment (Docker) and can be scaled horizontally. The use of asynchronous operations in FastAPI and the services will ensure efficient handling of concurrent requests.
-    *   **Observability**: Integration with Langfuse or Logfire will be a core feature. The agent's decisions, tool usage, and any errors will be logged to provide a clear trace of each processing request.
+    *   **Observability**: Integration with Logfire will be a core feature. The agent's decisions, tool usage, and any errors will be logged to provide a clear trace of each processing request.
 
 **4. Detailed Task Breakdown**
 
@@ -63,15 +64,15 @@ The key architectural components will be:
     *   `[ ] Task: Initialize Python project with pyproject.toml using pip.`
     *   `[ ] Task: Set up the directory structure (src, tests, docs, config).`
     *   `[x] Task: Set up a virtual environment (venv).`
-    *   `[x] Task: Install initial dependencies: fastapi, uvicorn, pydantic, pydantic-ai, httpx, beautifulsoup4, notion-client, python-dotenv.`
-    *   `[x] Task: Choose and install a monitoring library (logfire or langfuse).`
+    *   `[x] Task: Install initial dependencies: fastapi, uvicorn, pydantic, pydantic-ai, httpx, notion-client, python-dotenv, yt-dlp, openai, pydub, ffmpeg-python.`
+    *   `[x] Task: Choose and install a monitoring library (logfire).`
 
 *   **Backend:**
     *   `[ ] Task: Implement the FastAPI application entry point in main.py.`
-    *   `[ ] Task: Create the Pydantic model for the URL processing request.`
+    *   `[ ] Task: Create the Pydantic models for requests and video content.`
     *   `[ ] Task: Implement the /api/v1/process-url endpoint in api/process.py.`
     *   `[ ] Task: Implement the settings management in config/settings.py to load secrets.`
-    *   `[ ] Task: Implement the Web Scraping Service (services/scraping_service.py) with a function to get content from a URL.`
+    *   `[ ] Task: Implement the Video Scraping Service (services/video_scraping_service.py) using `yt-dlp` and audio transcription.`
     *   `[ ] Task: Implement the Notion Integration Service (services/notion_service.py) with functions to list databases and create pages.`
     *   `[ ] Task: Implement the Monitoring Service (services/monitoring_service.py) to log events.`
     *   `[ ] Task: Implement the Core Agent Service (core/agent.py) using pydantic-ai, integrating the scraping and Notion services as tools.`
@@ -80,10 +81,10 @@ The key architectural components will be:
     *   `[ ] Task: No database setup is required for this application itself, as it only interacts with the Notion API.`
 
 *   **QA / Testing:**
-    *   `[ ] Task: Write unit tests for the Web Scraping Service.`
+    *   `[ ] Task: Write unit tests for the Video Scraping Service.`
     *   `[ ] Task: Write unit tests for the Notion Integration Service (using mocks for the Notion API).`
     *   `[ ] Task: Write integration tests for the /api/v1/process-url endpoint.`
-    *   `[ ] Task: Manually test the end-to-end flow with various URLs.`
+    *   `[ ] Task: Manually test the end-to-end flow with various video URLs.`
 
 *   **Documentation:**
     *   `[ ] Task: Create a README.md with setup and usage instructions.`
@@ -92,10 +93,10 @@ The key architectural components will be:
 **5. Risks & Open Questions for the Team**
 
 *   **Risks:**
-    *   `[RISK-1]: Web scraping is fragile.` The structure of target websites can change at any time, breaking the scraping logic. The agent needs robust error handling to manage cases where content extraction fails.
-    *   `[RISK-2]: Scraping social media is challenging.` Websites like Facebook and Instagram are notoriously difficult to scrape. They use dynamic content loading, require authentication, and have strong anti-bot measures. A simple HTTP-based approach will likely fail, and a more robust solution using browser automation (e.g., Playwright) will be necessary. This adds complexity to the project.
-    *   `[RISK-3]: Rate limiting.` Both the websites being scraped and the Notion API will have rate limits. The application must handle these gracefully, potentially with backoff-and-retry mechanisms.
-    *   `[RISK-4]: AI "hallucination".` The AI agent might incorrectly interpret the content or make a poor decision about which Notion database to use. The prompts and logic must be carefully designed to be as accurate as possible, and logging is crucial for debugging these cases.
+    *   `[RISK-1]: Dependency on External Tools.` The core video processing logic relies on `yt-dlp` and an external audio transcription service (e.g., OpenAI Whisper). Outages or breaking changes in these tools could impact the service. The system will include a fallback to Playwright-based scraping to mitigate this.
+    *   `[RISK-2]: Handling Private/Protected Content.` While `yt-dlp` is powerful, it may fail on content that requires a login. The service will need logic to detect these cases and potentially use Playwright with authenticated sessions as a fallback, which adds complexity.
+    *   `[RISK-3]: Rate limiting.` The Notion API, transcription services, and potentially the video platforms themselves will have rate limits. The application must handle these gracefully, potentially with backoff-and-retry mechanisms.
+    *   `[RISK-4]: AI "hallucination".` The AI agent might incorrectly interpret the combined text (description + transcript) or make a poor decision about which Notion database to use. The prompts and logic must be carefully designed to be as accurate as possible, and logging is crucial for debugging these cases.
 
 *   **Open Questions:**
     *   `[Q-1]: Which monitoring tool (Langfuse or Logfire) should be prioritized for the initial implementation, and why?

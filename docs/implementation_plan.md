@@ -71,15 +71,16 @@ The implementation is divided into 10 feature branches across 4 phases, prioriti
 
 ---
 
-### Branch 5: `feature/web-scraping-service`
-**Goal**: Implement web scraping capabilities
+### Branch 5: `feature/video-scraping-service`
+**Goal**: Implement video content scraping and processing
 
 **Tasks**:
 - Implement `services/video_scraping_service.py`
-- Set up Playwright for browser automation
-- Create scrapers for YouTube, Facebook, Instagram
-- Implement content extraction logic
-- Add robust error handling for scraping failures
+- Integrate `yt-dlp` to download audio and metadata from video URLs
+- Add transcription service (e.g., OpenAI Whisper) to transcribe downloaded audio
+- Implement a Playwright fallback to scrape metadata if `yt-dlp` fails
+- Add caching to avoid re-processing the same URL
+- Add robust error handling for scraping and transcription failures
 
 **Dependencies**: `feature/project-foundation`, `feature/models-and-config`
 

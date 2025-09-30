@@ -15,7 +15,25 @@ The Data Models are a crucial part of the application, ensuring that data is str
         url: HttpUrl
     ```
 
-**3. Notion Models (`models/notion.py`)**
+### **3. Video Content Model (`video.py`)**
+
+*   **`VideoContent(BaseModel)`**: This model represents the structured data extracted from a video. It will be the output of the `VideoScrapingService` and the input for the `NotionIntegrationService`.
+
+    ```python
+    from pydantic import BaseModel, HttpUrl
+    from typing import list, Optional
+
+    class VideoContent(BaseModel):
+        url: HttpUrl
+        title: str
+        description: Optional[str]
+        author: Optional[str]
+        topics: list[str]
+        sentiment: str
+        locations: list[str]
+    ```
+
+### **4. Notion Models (`models/notion.py`)**
 
 These models represent the structure of data that is sent to and received from the Notion API. They will be used by the `NotionService` and the `CoreAgent`.
 
