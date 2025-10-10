@@ -35,6 +35,7 @@ dependencies = [
     "httpx>=0.26.0",
     "beautifulsoup4>=4.12.0",
     "lxml>=4.9.0",
+    "python-json-logger>=2.0.7"
 ]
 
 [project.optional-dependencies]

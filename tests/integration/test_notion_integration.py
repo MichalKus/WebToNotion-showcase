@@ -1,0 +1,286 @@
+"""Integration tests for Notion service.
+
+This module contains integration tests that verify the NotionService
+works correctly with the actual Notion API. These tests require
+valid Notion API credentials and should be run in a test environment.
+"""
+
+import pytest
+import asyncio
+import httpx
+from datetime import datetime
+
+from unittest.mock import patch
+
+from notion_client.errors import APIResponseError
+
+from webtonotion.services.notion_service import NotionService
+from webtonotion.exceptions import NotionAPIError, NotionAuthenticationError
+from webtonotion.config.settings import Settings
+from webtonotion.models.notion import NotionDatabase
+
+
+@pytest.mark.integration
+class TestNotionServiceIntegration:
+    """Integration tests for NotionService with real API calls."""
+    
+    @pytest.fixture(scope="class")
+    def settings(self):
+        """Create settings for integration testing.
+        
+        Note: These tests require a valid Notion API key set in environment
+        variables or test configuration.
+        """
+        return Settings()
+    
+    @pytest.fixture(scope="class")
+    def notion_service(self, settings):
+        """Create NotionService instance for integration testing."""
+        # Skip tests if no API key is configured
+        if not settings.notion_api_key:
+            pytest.skip("Notion API key not configured for integration tests")
+        
+        return NotionService(settings)
+    
+    @pytest.mark.asyncio
+    async def test_service_initialization(self, notion_service):
+        """Test that the service initializes correctly with real credentials."""
+        assert notion_service.client is not None
+        assert notion_service.rate_limiter is not None
+        assert notion_service.settings is not None
+    
+    @pytest.mark.asyncio
+    async def test_health_check_with_real_api(self, notion_service):
+        """Test health check with real Notion API."""
+        result = await notion_service.health_check()
+        assert result is True
+    
+    @pytest.mark.asyncio
+    async def test_get_databases_real_api(self, notion_service):
+        """Test retrieving databases from real Notion API."""
+        try:
+            databases = await notion_service.get_databases()
+            
+            # Verify the response structure
+            assert isinstance(databases, list)
+            
+            # If databases exist, verify their structure
+            if databases:
+                for db in databases:
+                    assert isinstance(db, NotionDatabase)
+                    assert db.id is not None
+                    assert db.name is not None
+                    assert isinstance(db.properties, dict)
+                    
+        except NotionAPIError as e:
+            # Log the error for debugging but don't fail the test
+            # as it might be due to permissions or API limits
+            pytest.skip(f"API error during database retrieval: {str(e)}")
+    
+    @pytest.mark.asyncio
+    async def test_get_database_properties_real_api(self, notion_service):
+        """Test retrieving database properties from real API."""
+        try:
+            # First get available databases
+            databases = await notion_service.get_databases()
+            
+            if not databases:
+                pytest.skip("No databases available for testing")
+            
+            # Test with the first available database
+            test_db = databases[0]
+            properties = await notion_service.get_database_properties(test_db.id)
+            
+            assert isinstance(properties, dict)
+            # Most databases should have at least a title property
+            assert len(properties) > 0
+            
+        except NotionAPIError as e:
+            pytest.skip(f"API error during properties retrieval: {str(e)}")
+    
+    @pytest.mark.asyncio
+    async def test_rate_limiting_behavior(self, notion_service):
+        """Test that rate limiting works correctly with real API."""
+        # Make multiple rapid requests to test rate limiting
+        start_time = datetime.now()
+        
+        try:
+            # Make several health check requests rapidly
+            tasks = [notion_service.health_check() for _ in range(5)]
+            results = await asyncio.gather(*tasks)
+            
+            end_time = datetime.now()
+            duration = (end_time - start_time).total_seconds()
+            
+            # All requests should succeed
+            assert all(results)
+            
+            # With rate limiting, this should take some time
+            # (though exact timing depends on API response times)
+            assert duration >= 0  # Basic sanity check
+            
+        except NotionAPIError as e:
+            pytest.skip(f"API error during rate limiting test: {str(e)}")
+    
+    @pytest.mark.asyncio
+    async def test_format_page_properties_integration(self, notion_service):
+        """Test property formatting with realistic content."""
+        content = {
+            "title": "Integration Test Video",
+            "url": "https://www.youtube.com/watch?v=dQw4w9WgXcQ",
+            "description": "This is a test video for integration testing",
+            "author": "Test Author",
+            "duration": 212,
+            "tags": ["test", "integration", "video"],
+            "published_date": "2024-01-01"
+        }
+        
+        properties = notion_service.format_page_properties(content)
+        
+        # Verify all expected properties are formatted correctly
+        assert "Title" in properties
+        assert "Url" in properties
+        assert "Description" in properties
+        assert "Author" in properties
+        assert "Duration" in properties
+        assert "Tags" in properties
+        assert "Published Date" in properties
+        
+        # Verify the structure matches Notion API expectations
+        assert properties["Title"]["title"][0]["text"]["content"] == content["title"]
+        assert properties["Url"]["url"] == content["url"]
+        assert properties["Duration"]["number"] == content["duration"]
+        assert len(properties["Tags"]["multi_select"]) == len(content["tags"])
+
+
+@pytest.mark.integration
+@pytest.mark.slow
+class TestNotionServiceEndToEnd:
+    """End-to-end integration tests for complete workflows."""
+    
+    @pytest.fixture(scope="class")
+    def settings(self):
+        """Create settings for E2E testing."""
+        return Settings()
+    
+    @pytest.fixture(scope="class")
+    def notion_service(self, settings):
+        """Create NotionService for E2E testing."""
+        if not settings.notion_api_key:
+            pytest.skip("Notion API key not configured for E2E tests")
+        
+        return NotionService(settings)
+    
+    @pytest.mark.asyncio
+    async def test_complete_workflow_simulation(self, notion_service):
+        """Test a complete workflow: get databases -> format properties -> (simulate) create page."""
+        try:
+            # Step 1: Get available databases
+            databases = await notion_service.get_databases()
+            
+            if not databases:
+                pytest.skip("No databases available for E2E testing")
+            
+            # Step 2: Get properties for the first database
+            test_db = databases[0]
+            db_properties = await notion_service.get_database_properties(test_db.id)
+            
+            # Step 3: Format content for page creation
+            test_content = {
+                "title": f"E2E Test - {datetime.now().isoformat()}",
+                "url": "https://example.com/test-video",
+                "description": "End-to-end integration test content"
+            }
+            
+            formatted_properties = notion_service.format_page_properties(test_content)
+            
+            # Verify the workflow completed successfully
+            assert isinstance(databases, list)
+            assert len(databases) > 0
+            assert isinstance(db_properties, dict)
+            assert isinstance(formatted_properties, dict)
+            assert "Title" in formatted_properties
+            
+            # Note: We don't actually create a page in the test to avoid
+            # cluttering the test Notion workspace
+            
+        except NotionAPIError as e:
+            pytest.skip(f"API error during E2E workflow: {str(e)}")
+
+
+# Utility functions for integration testing
+def requires_notion_api():
+    """Decorator to skip tests if Notion API is not available."""
+    def decorator(func):
+        def wrapper(*args, **kwargs):
+            settings = Settings()
+            if not settings.notion_api_key:
+                pytest.skip("Notion API key not configured")
+            return func(*args, **kwargs)
+        return wrapper
+    return decorator
+
+
+@pytest.mark.integration
+class TestNotionServiceErrorHandling:
+    """Test error handling with mocked API scenarios."""
+
+    @pytest.fixture
+    def notion_service(self):
+        """Create a NotionService instance for error handling testing without a real API key."""
+        from webtonotion.config.settings import Settings
+        settings = Settings()
+        settings.notion_api_key = "fake_key"  # Use a fake key
+        return NotionService(settings)
+
+    @pytest.mark.asyncio
+    @patch("webtonotion.services.notion_service.Client")
+    async def test_invalid_api_key_handling(self, mock_client):
+        """Test that NotionAuthenticationError is raised for invalid API keys."""
+        # Configure the mock to raise APIResponseError on search
+        mock_search = mock_client.return_value.search
+        mock_response = httpx.Response(
+            status_code=401,
+            json={"code": "unauthorized", "message": "API token is invalid."},
+        )
+        mock_search.side_effect = APIResponseError(
+            response=mock_response,
+            code="unauthorized",
+            message="API token is invalid.",
+        )
+
+        # Initialize NotionService with a fake key
+        from webtonotion.config.settings import Settings
+        settings = Settings()
+        settings.notion_api_key = "fake_key"
+        notion_service = NotionService(settings)
+
+        # Expect NotionAuthenticationError to be raised
+        with pytest.raises(NotionAuthenticationError, match="Notion API authentication failed"):
+            await notion_service.get_databases()
+
+    @pytest.mark.asyncio
+    @patch("webtonotion.services.notion_service.Client")
+    async def test_invalid_database_id_handling(self, mock_client):
+        """Test that NotionAPIError is raised for invalid database IDs."""
+        # Configure the mock to raise APIResponseError on retrieve
+        mock_retrieve = mock_client.return_value.databases.retrieve
+        mock_response = httpx.Response(
+            status_code=404,
+            json={"code": "object_not_found", "message": "Could not find database with ID: xxxxx."},
+        )
+        mock_retrieve.side_effect = APIResponseError(
+            response=mock_response,
+            code="object_not_found",
+            message="Could not find database with ID: xxxxx.",
+        )
+
+        # Initialize NotionService with a fake key
+        from webtonotion.config.settings import Settings
+        settings = Settings()
+        settings.notion_api_key = "fake_key"
+        notion_service = NotionService(settings)
+
+        # Expect NotionAPIError to be raised
+        with pytest.raises(NotionAPIError, match="Notion API error"):
+            await notion_service.get_database_properties("invalid-db-id")

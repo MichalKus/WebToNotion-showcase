@@ -4,12 +4,15 @@ import logging
 import platform
 import time
 from datetime import datetime, timezone
-from typing import Dict, Any
+from typing import Dict, Any, Annotated
 
-from fastapi import APIRouter, status
+from fastapi import APIRouter, status, HTTPException, Depends
 from pydantic import BaseModel
 
-from webtonotion.config.settings import settings
+from webtonotion.config.settings import Settings
+from webtonotion.services.notion_service import NotionService
+from webtonotion.dependencies import get_settings, get_notion_service
+from webtonotion.exceptions import NotionAPIError, NotionAuthenticationError
 
 logger = logging.getLogger(__name__)
 
@@ -41,9 +44,14 @@ _start_time = time.time()
 
 
 @router.get("/", response_model=HealthResponse, status_code=status.HTTP_200_OK)
-async def health_check() -> HealthResponse:
+async def health_check(
+    app_settings: Annotated[Settings, Depends(get_settings)]
+) -> HealthResponse:
     """Basic health check endpoint.
     
+    Args:
+        app_settings: Application settings injected via dependency injection
+        
     Returns:
         HealthResponse: Basic health status information
     """
@@ -52,15 +60,20 @@ async def health_check() -> HealthResponse:
     return HealthResponse(
         status="healthy",
         timestamp=datetime.now(timezone.utc),
-        version=settings.app_version,
-        service=settings.app_name,
+        version=app_settings.app_version,
+        service=app_settings.app_name,
     )
 
 
 @router.get("/status", response_model=SystemStatusResponse, status_code=status.HTTP_200_OK)
-async def system_status() -> SystemStatusResponse:
+async def system_status(
+    app_settings: Annotated[Settings, Depends(get_settings)]
+) -> SystemStatusResponse:
     """Comprehensive system status endpoint.
     
+    Args:
+        app_settings: Application settings injected via dependency injection
+        
     Returns:
         SystemStatusResponse: Detailed system status information
     """
@@ -82,10 +95,10 @@ async def system_status() -> SystemStatusResponse:
     return SystemStatusResponse(
         status="healthy",
         timestamp=datetime.now(timezone.utc),
-        version=settings.app_version,
-        service=settings.app_name,
-        environment=settings.environment,
-        debug=settings.debug,
+        version=app_settings.app_version,
+        service=app_settings.app_name,
+        environment=app_settings.environment,
+        debug=app_settings.debug,
         system_info=system_info,
         uptime_seconds=round(uptime, 2),
     )
@@ -134,3 +147,38 @@ async def liveness_check() -> Dict[str, str]:
         "status": "alive",
         "timestamp": datetime.now(timezone.utc).isoformat(),
     }
+
+
+@router.get("/notion-health", status_code=status.HTTP_200_OK)
+async def notion_health_check(
+    notion_service: Annotated[NotionService, Depends(get_notion_service)]
+) -> Dict[str, Any]:
+    """Check the health of the Notion API connection.
+    
+    Args:
+        notion_service: NotionService instance injected via dependency injection
+        
+    Returns:
+        Dict[str, Any]: Notion API health status
+    """
+    logger.debug("Notion health check requested")
+    try:
+        if await notion_service.health_check():
+            return {"status": "ok", "message": "Notion API is healthy"}
+        else:
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail="Notion API health check failed",
+            )
+    except NotionAuthenticationError as e:
+        logger.error(f"Notion authentication error: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail=f"Notion API authentication failed: {e.message}",
+        )
+    except NotionAPIError as e:
+        logger.error(f"Notion API error: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=f"Notion API error: {e.message}",
+        )

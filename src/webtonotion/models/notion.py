@@ -5,6 +5,7 @@ including database and page representations.
 """
 
 from datetime import datetime
+from typing import Any, Dict
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -17,7 +18,7 @@ class NotionDatabase(BaseModel):
     
     Attributes:
         id: Unique identifier for the database
-        title: Human-readable name of the database
+        name: Human-readable name of the database (changed from title for consistency)
         properties: Database schema defining available properties and their types
         created_time: Timestamp when the database was created
         last_edited_time: Timestamp of the last modification
@@ -28,7 +29,7 @@ class NotionDatabase(BaseModel):
         json_schema_extra={
             "example": {
                 "id": "12345678-1234-1234-1234-123456789012",
-                "title": "Video Content Database",
+                "name": "Video Content Database",
                 "properties": {
                     "Title": {"type": "title"},
                     "URL": {"type": "url"},
@@ -43,14 +44,14 @@ class NotionDatabase(BaseModel):
     )
 
     id: str = Field(..., description="Unique database identifier")
-    title: str = Field(..., description="Database title", min_length=1)
-    properties: dict[str, dict[str, str]] = Field(
+    name: str = Field(..., description="Database name", min_length=1)
+    properties: Dict[str, Any] = Field(
         default_factory=dict, 
         description="Database schema properties"
     )
-    created_time: datetime | None = Field(default=None, description="Creation timestamp")
-    last_edited_time: datetime | None = Field(default=None, description="Last edit timestamp")
-    url: str | None = Field(default=None, description="Direct URL to the database")
+    created_time: datetime = Field(..., description="Creation timestamp")
+    last_edited_time: datetime = Field(..., description="Last edit timestamp")
+    url: str = Field(..., description="Direct URL to the database")
 
 
 class NotionPage(BaseModel):
@@ -93,13 +94,56 @@ class NotionPage(BaseModel):
         }
     )
 
-    id: str | None = Field(default=None, description="Unique page identifier")
+    id: str = Field(..., description="Unique page identifier")
     database_id: str = Field(..., description="Parent database ID")
-    properties: dict[str, dict] = Field(
+    properties: Dict[str, Any] = Field(
         default_factory=dict, 
         description="Page properties matching database schema"
     )
-    created_time: datetime | None = Field(default=None, description="Creation timestamp")
-    last_edited_time: datetime | None = Field(default=None, description="Last edit timestamp")
-    url: str | None = Field(default=None, description="Direct URL to the page")
+    created_time: datetime = Field(..., description="Creation timestamp")
+    last_edited_time: datetime = Field(..., description="Last edit timestamp")
+    url: str = Field(..., description="Direct URL to the page")
     archived: bool = Field(default=False, description="Whether the page is archived")
+
+
+class NotionPageResponse(BaseModel):
+    """Response model for created Notion page.
+    
+    This model represents the response from the Notion API when a page is created,
+    containing the essential information about the newly created page.
+    
+    Attributes:
+        id: Unique identifier for the created page
+        url: Direct URL to access the page in Notion
+        created_time: Timestamp when the page was created
+        properties: Page properties as returned by the API
+        page: Created page details
+        success: Operation success status
+        message: Response message
+    """
+
+    model_config = ConfigDict(
+        json_schema_extra={
+            "example": {
+                "id": "87654321-4321-4321-4321-210987654321",
+                "url": "https://notion.so/page/87654321432143214321210987654321",
+                "created_time": "2024-01-01T00:00:00.000Z",
+                "properties": {
+                    "Title": {
+                        "title": [{"text": {"content": "Never Gonna Give You Up"}}]
+                    }
+                }
+            }
+        }
+    )
+
+    id: str = Field(..., description="Unique page identifier")
+    url: str = Field(..., description="Direct URL to the page")
+    created_time: datetime = Field(..., description="Creation timestamp")
+    properties: Dict[str, Any] = Field(
+        default_factory=dict, 
+        description="Page properties as returned by the API"
+    )
+    page: NotionPage = Field(..., description="Created page details")
+    success: bool = Field(..., description="Operation success status")
+    message: str = Field(..., description="Response message")
