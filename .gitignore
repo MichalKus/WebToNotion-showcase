@@ -173,7 +173,6 @@ cython_debug/
 
 # Project-specific ignores
 # Notion API keys and secrets
-.env.example
 .env.local
 .env.production
 

@@ -5,12 +5,13 @@ and creating Notion pages from web content.
 """
 
 import logging
-from typing import Dict, Any
+from typing import Dict, Any, Annotated
 
-from fastapi import APIRouter, HTTPException, status
-from fastapi.responses import JSONResponse
+from fastapi import APIRouter, HTTPException, status, Depends
 
 from webtonotion.models.request import ProcessURLRequest
+from webtonotion.services.notion_service import NotionService
+from webtonotion.dependencies import get_notion_service
 
 logger = logging.getLogger(__name__)
 
@@ -32,11 +33,15 @@ router = APIRouter(
     summary="Process URL and create Notion page",
     description="Process a given URL, extract content, and create a structured page in Notion",
 )
-async def process_url(request: ProcessURLRequest) -> Dict[str, Any]:
+async def process_url(
+    request: ProcessURLRequest,
+    notion_service: Annotated[NotionService, Depends(get_notion_service)]
+) -> Dict[str, Any]:
     """Process a URL and create a Notion page.
     
     Args:
         request: The URL processing request containing the URL to process
+        notion_service: NotionService instance injected via dependency injection
         
     Returns:
         Dict containing the processing result and Notion page URL
