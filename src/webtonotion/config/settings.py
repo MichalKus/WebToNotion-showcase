@@ -10,54 +10,54 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 class Settings(BaseSettings):
     """Application settings loaded from environment variables.
-    
+
     This class manages all configuration settings for the WebToNotion application,
     loading values from environment variables and .env files.
-    
+
     Attributes:
         # Application Metadata
         app_name: Application name for identification
         app_version: Application version for tracking
-        
+
         # Core API Configuration
         notion_api_key: Notion API integration token for database operations
         notion_version: Notion API version to use
         logfire_token: Logfire authentication token for monitoring and logging
         logfire_project_name: Logfire project name for identification
         api_key: Optional API key for securing the application endpoints
-        
+
         # Logging Configuration
         log_level: Logging level for the application
-        
+
         # Rate Limiting Configuration
         rate_limit_requests: Maximum number of requests per minute per IP
         rate_limit_window: Time window for rate limiting in seconds
-        
+
         # CORS Configuration
         cors_origins: List of allowed CORS origins
-        
+
         # Application Configuration
         debug: Enable debug mode for development
         environment: Application environment (development, staging, production)
-        
+
         # Web Scraping Configuration
         user_agent: User agent string for web requests
         max_retries: Maximum number of retry attempts for failed requests
-        
+
         # Playwright Configuration
         playwright_headless: Run Playwright browser in headless mode
         playwright_timeout: Playwright operation timeout in milliseconds
-        
+
         # Security Configuration
         secret_key: Secret key for cryptographic operations
         allowed_hosts: List of allowed host names for security
-        
+
         # Processing Configuration
         max_content_length: Maximum content length for video processing
         request_timeout: Request timeout in seconds
         cache_ttl: Cache time-to-live in seconds
         background_task_timeout: Background task timeout in seconds
-        
+
         # Server Configuration
         host: Server host address
         port: Server port number
@@ -72,72 +72,57 @@ class Settings(BaseSettings):
     )
 
     # Application Metadata
-    app_name: str = Field(
-        default="WebToNotion", description="Application name for identification"
-    )
-    
-    app_version: str = Field(
-        default="0.1.0", description="Application version for tracking"
-    )
+    app_name: str = Field(default="WebToNotion", description="Application name for identification")
+
+    app_version: str = Field(default="0.1.0", description="Application version for tracking")
 
     # Core API Configuration
-    notion_api_key: str | None = Field(
-        default=None, description="Notion API integration token"
-    )
-    
-    notion_version: str = Field(
-        default="2022-06-28", description="Notion API version to use"
-    )
-    
-    logfire_token: str | None = Field(
-        default=None, description="Logfire authentication token"
-    )
-    
+    notion_api_key: str | None = Field(default=None, description="Notion API integration token")
+
+    notion_version: str = Field(default="2022-06-28", description="Notion API version to use")
+
+    logfire_token: str | None = Field(default=None, description="Logfire authentication token")
+
     logfire_project_name: str = Field(
         default="webtonotion", description="Logfire project name for identification"
     )
-    
-    api_key: str | None = Field(
-        default=None, description="API key for securing the API"
-    )
+
+    api_key: str | None = Field(default=None, description="API key for securing the API")
 
     # Logging Configuration
     log_level: str = Field(
-        default="INFO", 
-        description="Logging level (DEBUG, INFO, WARNING, ERROR, CRITICAL)"
+        default="INFO",
+        description="Logging level (DEBUG, INFO, WARNING, ERROR, CRITICAL)",
     )
 
     # Rate Limiting Configuration
     rate_limit_requests: int = Field(
         default=60, description="Maximum requests per minute per IP", ge=1
     )
-    
+
     rate_limit_window: int = Field(
         default=60, description="Rate limit time window in seconds", ge=1
     )
 
     # CORS Configuration
     cors_origins: list[str] = Field(
-        default_factory=lambda: ["*"], 
-        description="Allowed CORS origins"
+        default_factory=lambda: ["*"], description="Allowed CORS origins"
     )
 
     # Application Configuration
-    debug: bool = Field(
-        default=False, description="Enable debug mode"
-    )
-    
+    debug: bool = Field(default=False, description="Enable debug mode")
+
     environment: str = Field(
-        default="development", 
-        description="Application environment (development, staging, production)"
+        default="development",
+        description="Application environment (development, staging, production)",
     )
 
     # Web Scraping Configuration
     user_agent: str = Field(
         default="WebToNotion/0.1.0 (https://github.com/MichalKus/WebToNotion)",
-        description="User agent string for web requests"
+        description="User agent string for web requests",
     )
-    
+
     max_retries: int = Field(
         default=3, description="Maximum retry attempts for failed requests", ge=0
     )
@@ -146,57 +131,47 @@ class Settings(BaseSettings):
     playwright_headless: bool = Field(
         default=True, description="Run Playwright browser in headless mode"
     )
-    
+
     playwright_timeout: int = Field(
-        default=30000, 
-        description="Playwright operation timeout in milliseconds", 
-        ge=1000
+        default=30000,
+        description="Playwright operation timeout in milliseconds",
+        ge=1000,
     )
 
     # Security Configuration
     secret_key: str = Field(
-        default="dev-secret-key-change-in-production-32chars", 
-        description="Secret key for cryptographic operations", 
-        min_length=32
+        default="dev-secret-key-change-in-production-32chars",
+        description="Secret key for cryptographic operations",
+        min_length=32,
     )
-    
+
     allowed_hosts: list[str] = Field(
         default_factory=lambda: ["localhost", "127.0.0.1"],
-        description="List of allowed host names for security"
+        description="List of allowed host names for security",
     )
 
     # Processing Configuration
     max_content_length: int = Field(
         default=100 * 1024 * 1024,  # 100MB
         description="Maximum content length for video processing in bytes",
-        ge=1024
+        ge=1024,
     )
-    
-    request_timeout: int = Field(
-        default=300, description="Request timeout in seconds", ge=1
-    )
-    
+
+    request_timeout: int = Field(default=300, description="Request timeout in seconds", ge=1)
+
     background_task_timeout: int = Field(
         default=600, description="Background task timeout in seconds", ge=1
     )
 
     # Caching Configuration
-    cache_ttl: int = Field(
-        default=3600, description="Cache time-to-live in seconds", ge=0
-    )
+    cache_ttl: int = Field(default=3600, description="Cache time-to-live in seconds", ge=0)
 
     # Server Configuration
-    host: str = Field(
-        default="0.0.0.0", description="Server host address"
-    )
-    
-    port: int = Field(
-        default=8000, description="Server port", ge=1, le=65535
-    )
-    
-    workers: int = Field(
-        default=1, description="Number of worker processes", ge=1
-    )
+    host: str = Field(default="0.0.0.0", description="Server host address")
+
+    port: int = Field(default=8000, description="Server port", ge=1, le=65535)
+
+    workers: int = Field(default=1, description="Number of worker processes", ge=1)
 
 
 # Global instance of the settings

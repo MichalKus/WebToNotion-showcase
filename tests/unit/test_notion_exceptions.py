@@ -1,12 +1,10 @@
 """Unit tests for the Notion exception classes."""
 
-import pytest
-
 from webtonotion.exceptions import (
-    NotionServiceError,
+    NotionAPIError,
     NotionAuthenticationError,
     NotionRateLimitError,
-    NotionAPIError
+    NotionServiceError,
 )
 
 

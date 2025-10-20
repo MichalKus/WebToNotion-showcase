@@ -29,7 +29,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
             "app_version": settings.app_version,
             "debug": settings.debug,
             "environment": settings.environment,
-        }
+        },
     )
 
     # Initialize services here if needed
@@ -58,7 +58,7 @@ def create_app() -> FastAPI:
     # Add middleware (order matters - first added is outermost)
     app.add_middleware(ErrorHandlingMiddleware)
     app.add_middleware(RequestLoggingMiddleware)
-    
+
     app.add_middleware(
         TrustedHostMiddleware,
         allowed_hosts=settings.allowed_hosts,
@@ -73,9 +73,9 @@ def create_app() -> FastAPI:
     )
 
     # Include API routers
-    from webtonotion.api.process import router as process_router
     from webtonotion.api.health import router as health_router
-    
+    from webtonotion.api.process import router as process_router
+
     app.include_router(process_router, prefix="/api/v1")
     app.include_router(health_router, prefix="/api/v1")
 
@@ -84,7 +84,7 @@ def create_app() -> FastAPI:
 
 if __name__ == "__main__":
     import uvicorn
-    
+
     uvicorn.run(
         "webtonotion.main:create_app",
         factory=True,

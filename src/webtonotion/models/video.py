@@ -11,10 +11,10 @@ from pydantic import BaseModel, ConfigDict, Field, HttpUrl
 
 class VideoContent(BaseModel):
     """Represents extracted video content with metadata and analysis.
-    
+
     This model contains all the information extracted from a video URL,
     including metadata, transcription, and AI-generated analysis.
-    
+
     Attributes:
         url: The original video URL
         title: Video title extracted from metadata
@@ -45,8 +45,8 @@ class VideoContent(BaseModel):
                 "metadata": {
                     "view_count": 1000000000,
                     "like_count": 15000000,
-                    "platform": "youtube"
-                }
+                    "platform": "youtube",
+                },
             }
         }
     )
@@ -62,6 +62,5 @@ class VideoContent(BaseModel):
     sentiment: str = Field(default="neutral", description="Overall sentiment analysis")
     locations: list[str] = Field(default_factory=list, description="Geographic locations mentioned")
     metadata: dict[str, str | int | float | bool] = Field(
-        default_factory=dict, 
-        description="Additional platform-specific metadata"
+        default_factory=dict, description="Additional platform-specific metadata"
     )
