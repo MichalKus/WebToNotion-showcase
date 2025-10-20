@@ -1,7 +1,7 @@
 """Unit tests for the RateLimiter class."""
 
-import asyncio
 import time
+
 import pytest
 
 from webtonotion.services.notion_service import RateLimiter

@@ -5,36 +5,46 @@ __author__ = "MichalKus"
 __description__ = "FastAPI application to process URLs and create Notion pages"
 
 # Make exceptions available at package level for easy importing
-from .exceptions import *
+from .exceptions import (
+    AIAgentError,
+    APIError,
+    ConfigurationError,
+    ContentExtractionError,
+    ContentProcessingError,
+    LLMError,
+    NotionAPIError,
+    NotionAuthenticationError,
+    NotionRateLimitError,
+    NotionServiceError,
+    PlaywrightError,
+    ProcessingError,
+    ValidationError,
+    WebScrapingError,
+    WebToNotionError,
+)
 
 __all__ = [
     # Version info
     "__version__",
-    "__author__", 
+    "__author__",
     "__description__",
-    
     # Core exceptions
     "WebToNotionError",
-    
     # Notion exceptions
     "NotionServiceError",
-    "NotionAuthenticationError", 
+    "NotionAuthenticationError",
     "NotionRateLimitError",
     "NotionAPIError",
-    
     # Web scraping exceptions
     "WebScrapingError",
     "ContentExtractionError",
     "PlaywrightError",
-    
     # AI agent exceptions
     "AIAgentError",
     "LLMError",
     "ContentProcessingError",
-    
     # Configuration exceptions
     "ConfigurationError",
-    
     # API exceptions
     "APIError",
     "ValidationError",
