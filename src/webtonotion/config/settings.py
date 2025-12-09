@@ -163,6 +163,70 @@ class Settings(BaseSettings):
         default=600, description="Background task timeout in seconds", ge=1
     )
 
+    # Video Processing Configuration
+    cache_dir: str = Field(default="./cache", description="Directory for caching processed content")
+
+    max_video_duration: int = Field(
+        default=3600, description="Maximum video duration in seconds (1 hour)", ge=1
+    )
+
+    enable_caching: bool = Field(default=True, description="Enable/disable caching")
+
+    # OpenRouter Configuration
+    openrouter_api_key: str | None = Field(
+        default=None, description="OpenRouter API key for AI analysis"
+    )
+
+    openrouter_model: str = Field(
+        default="openai/gpt-4o-mini",
+        description="OpenRouter model for AI analysis (e.g., anthropic/claude-3.5-sonnet, openai/gpt-4o-mini)",
+    )
+
+    whisper_api_key: str | None = Field(
+        default=None, description="Whisper API key for Groq service"
+    )
+
+    whisper_model: str = Field(
+        default="whisper-large-v3",
+        description="Whisper model size (tiny, base, small, medium, large)",
+    )
+
+    max_concurrent_downloads: int = Field(
+        default=3, description="Maximum concurrent video downloads", ge=1
+    )
+
+    audio_quality: str = Field(
+        default="best", description="Audio quality for transcription (best, good, medium)"
+    )
+
+    chunk_size: int = Field(default=1024, description="Audio processing chunk size", ge=1)
+
+    cache_expiration: int = Field(
+        default=86400, description="Cache expiration in seconds (0 = never expire)", ge=0
+    )
+
+    max_file_size: str = Field(
+        default="100MB", description="Maximum file size for video downloads (e.g., '100MB')"
+    )
+
+    temp_dir: str = Field(
+        default="/tmp/webtonotion", description="Temporary directory for processing"
+    )
+
+    cleanup_temp_files: bool = Field(
+        default=True, description="Clean up temporary files after processing"
+    )
+
+    max_file_size: str = Field(default="500MB", description="Maximum file size for download")
+
+    max_concurrent_jobs: int = Field(
+        default=5, description="Maximum concurrent processing jobs", ge=1
+    )
+
+    verbose_logging: bool = Field(
+        default=False, description="Enable verbose logging for video processing"
+    )
+
     # Caching Configuration
     cache_ttl: int = Field(default=3600, description="Cache time-to-live in seconds", ge=0)
 

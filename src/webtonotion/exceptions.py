@@ -96,6 +96,50 @@ class PlaywrightError(WebScrapingError):
     pass
 
 
+# Video Scraping Exceptions
+class VideoScrapingError(WebScrapingError):
+    """Base exception for video scraping errors.
+
+    This is the parent class for all video scraping related exceptions.
+    """
+
+    pass
+
+
+class VideoDownloadError(VideoScrapingError):
+    """Raised when video download fails.
+
+    This exception is raised when:
+    - Video URL is inaccessible
+    - Video format is not supported
+    - Download process encounters errors
+    """
+
+    pass
+
+
+class TranscriptionError(VideoScrapingError):
+    """Raised when audio transcription fails.
+
+    This exception is raised when:
+    - Audio extraction from video fails
+    - OpenAI Whisper API is unavailable
+    - Audio format is not supported for transcription
+    """
+
+    pass
+
+
+class PlaywrightFallbackError(VideoScrapingError):
+    """Raised when Playwright fallback fails.
+
+    This exception is raised when Playwright cannot extract
+    video metadata as a fallback mechanism.
+    """
+
+    pass
+
+
 # AI Agent Exceptions
 class AIAgentError(WebToNotionError):
     """Base exception for AI agent errors.

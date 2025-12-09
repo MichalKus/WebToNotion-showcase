@@ -1,13 +1,17 @@
 # WebToNotion
 
-AI-powered URL processing for Notion integration. A FastAPI application that processes URLs from social media platforms, extracts structured information using AI agents, and intelligently creates Notion pages in appropriate databases.
+AI-powered URL processing for Notion integration. A FastAPI application that processes URLs from social media platforms and video content, extracts structured information using AI agents, and intelligently creates Notion pages in appropriate databases.
 
 ## 🚀 Features
 
 - **AI-Powered Processing**: Uses PydanticAI agents to intelligently analyze content
+- **Video Content Processing**: Advanced video scraping with yt-dlp, audio transcription, and AI analysis
 - **Social Media Support**: Specialized handling for YouTube, Facebook, and Instagram
 - **Smart Notion Integration**: Automatically selects the most appropriate Notion database
 - **Web Scraping**: Robust content extraction with Playwright for dynamic content
+- **Audio Transcription**: OpenAI Whisper integration for video-to-text conversion
+- **Content Analysis**: AI-powered topic extraction, sentiment analysis, and location detection
+- **Caching System**: Intelligent caching for processed video content
 - **Monitoring & Observability**: Integrated with Logfire for comprehensive monitoring
 - **Modern Architecture**: Built with FastAPI, Pydantic, and async/await patterns
 
@@ -25,7 +29,9 @@ The application follows a modular, service-oriented architecture:
 
 - Python 3.12+
 - Notion API integration token
+- OpenAI API key (for video transcription and content analysis)
 - Logfire account (optional, for monitoring)
+- FFmpeg (for audio processing)
 
 ## 🛠️ Installation
 
@@ -67,12 +73,18 @@ The application follows a modular, service-oriented architecture:
    ```env
    # Required
    NOTION_API_KEY=your_notion_integration_token_here
+   OPENAI_API_KEY=your_openai_api_key_here
    SECRET_KEY=your_secret_key_here_change_in_production
    
    # Optional
    LOGFIRE_TOKEN=your_logfire_token_here
    DEBUG=true
    LOG_LEVEL=INFO
+   
+   # Video Processing Configuration
+   CACHE_DIR=./cache
+   MAX_VIDEO_DURATION=3600  # Maximum video duration in seconds (1 hour)
+   ENABLE_CACHING=true
    ```
 
 3. **Set up Notion Integration**:
@@ -98,21 +110,73 @@ uvicorn webtonotion.main:create_app --host 0.0.0.0 --port 8000
 ### API Endpoints
 
 #### Process URL
+Process any supported URL (video or web content) and create a Notion page.
+
 ```http
-POST /api/v1/process-url
+POST /process/url
 Content-Type: application/json
 
 {
-  "url": "https://www.instagram.com/p/example/"
+  "url": "https://www.youtube.com/watch?v=dQw4w9WgXcQ",
+  "database_id": "your_notion_database_id",
+  "custom_properties": {
+    "source": "youtube",
+    "priority": "high"
+  }
 }
+```
+
+**Response for Video Content**:
+```json
+{
+  "success": true,
+  "message": "Video URL processed successfully",
+  "page_id": "page_123",
+  "page_url": "https://notion.so/page_123",
+  "content_type": "video",
+  "video_details": {
+    "title": "Never Gonna Give You Up",
+    "author": "Rick Astley",
+    "duration": 212,
+    "published_at": "2009-10-25T00:00:00",
+    "topics": ["music", "80s", "pop"],
+    "sentiment": "positive",
+    "transcript_preview": "Never gonna give you up, never gonna let you down..."
+  }
+}
+```
+
+**Response for Non-Video Content**:
+```json
+{
+  "success": false,
+  "message": "Non-video URL processing not yet implemented",
+  "content_type": "web_page",
+  "url": "https://example.com/article"
+}
+```
+
+#### Processing Status
+Check the current status of processing capabilities.
+
+```http
+GET /process/status
 ```
 
 **Response**:
 ```json
 {
-  "status": "success",
-  "message": "Successfully processed and added to Notion.",
-  "notion_page_url": "https://www.notion.so/..."
+  "video_scraping": "available",
+  "web_scraping": "not_implemented",
+  "notion_integration": "available",
+  "ai_agents": "available",
+  "supported_video_platforms": [
+    "youtube.com",
+    "youtu.be",
+    "vimeo.com",
+    "dailymotion.com",
+    "twitch.tv"
+  ]
 }
 ```
 
@@ -149,6 +213,15 @@ pytest tests/unit/
 
 # Integration tests only
 pytest tests/integration/
+
+# Video processing tests only
+pytest tests/ -k "video"
+
+# Skip slow tests
+pytest tests/ -m "not slow"
+
+# Skip tests requiring API keys
+pytest tests/ -m "not requires_api_keys"
 ```
 
 ## 🔧 Development
@@ -186,13 +259,31 @@ WebToNotion/
 │   ├── api/                   # FastAPI routers and endpoints
 │   ├── core/                  # Core business logic and AI agents
 │   ├── services/              # External service integrations
+│   │   ├── notion_service.py  # Notion API integration
+│   │   └── video_scraping_service.py  # Video processing service
 │   ├── models/                # Pydantic data models
+│   │   ├── request.py         # API request models
+│   │   ├── response.py        # API response models
+│   │   └── video.py          # Video content models
 │   ├── config/                # Configuration management
+│   │   ├── settings.py        # Application settings
+│   │   └── logging.py         # Logging configuration
+│   ├── utils/                 # Utility functions
+│   ├── exceptions.py          # Custom exception classes
+│   ├── dependencies.py        # FastAPI dependency injection
 │   └── main.py               # Application entry point
 ├── tests/                     # Test suite
 │   ├── unit/                  # Unit tests
-│   └── integration/           # Integration tests
+│   │   ├── test_video_scraping_service.py
+│   │   └── test_api_process.py
+│   ├── integration/           # Integration tests
+│   │   ├── test_video_scraping_integration.py
+│   │   └── test_api_process_integration.py
+│   └── conftest.py           # Pytest configuration and fixtures
 ├── docs/                      # Documentation
+│   ├── architecture/          # Architecture documentation
+│   └── diagrams/             # System diagrams
+├── cache/                     # Video processing cache (created at runtime)
 ├── pyproject.toml            # Project configuration
 ├── .env.example              # Environment variables template
 └── README.md                 # This file

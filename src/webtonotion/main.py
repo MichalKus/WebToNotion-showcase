@@ -12,7 +12,9 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.trustedhost import TrustedHostMiddleware
 
+from webtonotion.api.health import router as health_router
 from webtonotion.api.middleware import ErrorHandlingMiddleware, RequestLoggingMiddleware
+from webtonotion.api.process import router as process_router
 from webtonotion.config.logging import setup_logging
 from webtonotion.config.settings import settings
 
@@ -45,8 +47,6 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
 
 def create_app() -> FastAPI:
     """Create and configure the FastAPI application."""
-    setup_logging()
-
     app = FastAPI(
         title=settings.app_name,
         version=settings.app_version,
@@ -54,6 +54,7 @@ def create_app() -> FastAPI:
         debug=settings.debug,
         lifespan=lifespan,
     )
+    setup_logging(app)
 
     # Add middleware (order matters - first added is outermost)
     app.add_middleware(ErrorHandlingMiddleware)
@@ -71,10 +72,6 @@ def create_app() -> FastAPI:
         allow_methods=["*"],
         allow_headers=["*"],
     )
-
-    # Include API routers
-    from webtonotion.api.health import router as health_router
-    from webtonotion.api.process import router as process_router
 
     app.include_router(process_router, prefix="/api/v1")
     app.include_router(health_router, prefix="/api/v1")
