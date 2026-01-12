@@ -47,10 +47,12 @@ def get_logging_config() -> Dict[str, Any]:
     # Determine log format based on environment
     if settings.environment == "development":
         formatter_class = "logging.Formatter"
-        formatter_format = "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
+        formatter_format = (
+            "%(asctime)s - %(name)s - %(levelname)s - [%(filename)s:%(lineno)d] - %(message)s"
+        )
     else:
         formatter_class = "webtonotion.config.logging.StructuredFormatter"
-        formatter_format = "%(asctime)s %(name)s %(levelname)s %(message)s"
+        formatter_format = "%(asctime)s %(name)s %(levelname)s %(filename)s %(lineno)d %(message)s"
 
     config = {
         "version": 1,
@@ -99,7 +101,7 @@ def get_logging_config() -> Dict[str, Any]:
     return config
 
 
-def setup_logging() -> None:
+def setup_logging(app) -> None:
     """Configure application logging with structured format."""
 
     # Get logging configuration
@@ -112,13 +114,17 @@ def setup_logging() -> None:
     if settings.logfire_token:
         try:
             logfire.configure(
+                send_to_logfire="if-token-present",
                 token=settings.logfire_token,
-                project_name=settings.logfire_project_name,
+                service_name=settings.logfire_project_name,  # Use service_name instead
                 environment=settings.environment,
             )
 
             # Instrument FastAPI
-            logfire.instrument_fastapi()
+            logfire.instrument_fastapi(app)
+            logfire.instrument_httpx()
+            logfire.info("Configuring logfire for Pydantic AI instrumentation")
+            logfire.instrument_pydantic_ai()
 
             # Log successful Logfire setup
             logger = logging.getLogger(__name__)

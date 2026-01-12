@@ -22,6 +22,7 @@ from webtonotion.exceptions import (
     NotionRateLimitError,
 )
 from webtonotion.models.notion import NotionDatabase, NotionPage, NotionPageResponse
+from webtonotion.models.video import VideoContent
 from webtonotion.utils.rate_limiter import RateLimiter
 
 logger = logging.getLogger(__name__)
@@ -155,6 +156,64 @@ class NotionService:
             logger.error(f"Failed to get databases: {e}")
             await self._handle_api_error(e)
 
+    def format_video_properties(
+        self, video_content: VideoContent, custom_properties: Dict[str, Any] = None
+    ) -> Dict[str, Any]:
+        """Convert VideoContent to Notion page properties.
+
+        Args:
+            video_content: Processed video content
+            custom_properties: Additional custom properties to include
+
+        Returns:
+            Dict[str, Any]: Notion-formatted properties
+        """
+        properties = {
+            "Title": {"title": [{"text": {"content": video_content.title or "Untitled Video"}}]},
+            "URL": {"url": video_content.url},
+            "Author": {"rich_text": [{"text": {"content": video_content.author or "Unknown"}}]},
+            "Duration": {
+                "rich_text": [
+                    {
+                        "text": {
+                            "content": (
+                                str(video_content.duration) if video_content.duration else "N/A"
+                            )
+                        }
+                    }
+                ]
+            },
+            "Published At": {
+                "date": (
+                    {"start": video_content.published_at.isoformat()}
+                    if video_content.published_at
+                    else None
+                )
+            },
+            "Topics": {
+                "multi_select": (
+                    [{"name": topic} for topic in video_content.topics]
+                    if video_content.topics
+                    else []
+                )
+            },
+            "Sentiment": {
+                "rich_text": [{"text": {"content": video_content.sentiment or "Neutral"}}]
+            },
+            "Locations": {
+                "multi_select": (
+                    [{"name": location} for location in video_content.locations]
+                    if video_content.locations
+                    else []
+                )
+            },
+        }
+
+        if custom_properties:
+            properties.update(custom_properties)
+
+        return properties
+
     async def create_page(
         self,
         database_id: str,
@@ -229,6 +288,28 @@ class NotionService:
             logger.error(f"Failed to create page in database {database_id}: {e}")
             await self._handle_api_error(e)
 
+    async def create_video_page(
+        self,
+        database_id: str,
+        custom_properties: Dict[str, Any],
+        video_content: VideoContent,
+    ) -> NotionPageResponse:
+        """Create a new page with video content in the specified database.
+
+        Args:
+            database_id: ID of the target database
+            properties: Page properties matching the database schema
+            video_content: Processed video content
+
+        Returns:
+            NotionPageResponse with created page information
+        """
+        children = self.format_video_page_content(video_content)
+        properties = self.format_video_properties(video_content, custom_properties)
+        return await self.create_page(
+            database_id=database_id, properties=properties, children=children
+        )
+
     async def get_database_properties(self, database_id: str) -> Dict[str, Any]:
         """Get the properties schema for a specific database.
 
@@ -257,6 +338,84 @@ class NotionService:
         except Exception as e:
             logger.error(f"Failed to get database properties for {database_id}: {e}")
             await self._handle_api_error(e)
+
+    def format_video_page_content(self, video_content: VideoContent) -> list:
+        """Create Notion page content blocks for video content.
+
+        Args:
+            video_content: Processed video content
+
+        Returns:
+            list: List of Notion content blocks
+        """
+        blocks = []
+
+        # Add description if available
+        if video_content.description:
+            blocks.append(
+                {
+                    "object": "block",
+                    "type": "paragraph",
+                    "paragraph": {
+                        "rich_text": [
+                            {"type": "text", "text": {"content": video_content.description}}
+                        ]
+                    },
+                }
+            )
+
+        # Add transcript if available
+        if video_content.transcript:
+            blocks.extend(
+                [
+                    {
+                        "object": "block",
+                        "type": "heading_2",
+                        "heading_2": {
+                            "rich_text": [{"type": "text", "text": {"content": "Transcript"}}]
+                        },
+                    },
+                    {
+                        "object": "block",
+                        "type": "paragraph",
+                        "paragraph": {
+                            "rich_text": [
+                                {"type": "text", "text": {"content": video_content.transcript}}
+                            ]
+                        },
+                    },
+                ]
+            )
+
+        # Add locations if available
+        if video_content.locations:
+            blocks.extend(
+                [
+                    {
+                        "object": "block",
+                        "type": "heading_3",
+                        "heading_3": {
+                            "rich_text": [
+                                {"type": "text", "text": {"content": "Locations Mentioned"}}
+                            ]
+                        },
+                    },
+                    {
+                        "object": "block",
+                        "type": "bulleted_list_item",
+                        "bulleted_list_item": {
+                            "rich_text": [
+                                {
+                                    "type": "text",
+                                    "text": {"content": ", ".join(video_content.locations)},
+                                }
+                            ]
+                        },
+                    },
+                ]
+            )
+
+        return blocks
 
     async def validate_database_access(self, database_id: str) -> bool:
         """Validate that the integration has access to a specific database.

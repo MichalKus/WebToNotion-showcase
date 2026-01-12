@@ -40,3 +40,15 @@ def get_notion_service(
     from webtonotion.services.notion_service import NotionService
 
     return NotionService(settings=app_settings)
+
+
+def get_video_scraping_service() -> "VideoScrapingService":
+    """Get VideoScrapingService instance.
+
+    Returns:
+        VideoScrapingService: Configured VideoScrapingService instance
+    """
+    # Import here to avoid circular imports
+    from webtonotion.services.video_scraping_service import VideoScrapingService
+
+    return VideoScrapingService()

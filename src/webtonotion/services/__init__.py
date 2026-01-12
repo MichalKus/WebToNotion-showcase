@@ -6,5 +6,6 @@ and monitoring services.
 """
 
 from .notion_service import NotionService
+from .video_scraping_service import VideoScrapingService
 
-__all__ = ["NotionService"]
+__all__ = ["NotionService", "VideoScrapingService"]

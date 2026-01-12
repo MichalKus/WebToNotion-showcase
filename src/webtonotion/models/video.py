@@ -5,8 +5,46 @@ extracted from various video platforms.
 """
 
 from datetime import datetime
+from typing import List, Optional
 
 from pydantic import BaseModel, ConfigDict, Field, HttpUrl
+
+
+class ContentAnalysisResult(BaseModel):
+    """Structured output model for video content analysis."""
+
+    topics: List[str] = Field(
+        description="List of main topics discussed in the video", min_items=1, max_items=10
+    )
+    sentiment: str = Field(
+        description="Overall sentiment of the video content",
+        pattern="^(positive|negative|neutral)$",
+    )
+    locations: List[str] = Field(
+        description="Geographical locations mentioned in the video",
+        default_factory=list,
+        max_items=20,
+    )
+    key_insights: List[str] = Field(
+        description="Key insights or takeaways from the video", default_factory=list, max_items=10
+    )
+    content_category: str = Field(description="Category of the video content", default="general")
+
+
+class TranscriptionResult(BaseModel):
+    """Structured output model for audio transcription."""
+
+    transcript: str = Field(description="The transcribed text from the audio")
+    confidence: Optional[float] = Field(
+        description="Confidence score of the transcription (0.0 to 1.0)",
+        default=None,
+        ge=0.0,
+        le=1.0,
+    )
+    language: Optional[str] = Field(description="Detected language of the audio", default=None)
+    processing_time: Optional[float] = Field(
+        description="Time taken to process the audio in seconds", default=None, ge=0.0
+    )
 
 
 class VideoContent(BaseModel):
@@ -55,7 +93,7 @@ class VideoContent(BaseModel):
     title: str = Field(..., description="Video title", min_length=1)
     description: str = Field(default="", description="Video description")
     author: str = Field(..., description="Video creator/channel name", min_length=1)
-    duration: int | None = Field(default=None, description="Video duration in seconds", ge=0)
+    duration: float | None = Field(default=None, description="Video duration in seconds", ge=0)
     published_at: datetime | None = Field(default=None, description="Video publication timestamp")
     transcript: str = Field(default="", description="Full text transcript of the video")
     topics: list[str] = Field(default_factory=list, description="Main topics identified")
