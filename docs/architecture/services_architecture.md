@@ -23,10 +23,13 @@ The Services layer contains a collection of independent, reusable components tha
 *   **Key Functions**:
     *   `get_databases() -> list[dict]`: Retrieves a list of all databases that the integration has access to.
     *   `create_page(database_id: str, data: dict) -> dict`: Creates a new page in the specified database with the provided data.
+    *   `create_video_page(database_id: str, video_content: VideoContent) -> NotionPageResponse`: Orchestrates the creation of a video page by fetching the database schema and using an AI agent to map the content.
+    *   `get_database_properties(database_id: str) -> dict`: Retrieves the exact schema of a Notion database.
 *   **Implementation Details**:
-    *   This service will use the official `notion-client` library for all API interactions.
-    *   It will be initialized with the Notion API key, which will be loaded from the application's configuration.
-    *   It will include robust error handling to manage API rate limits and other potential issues.
+    *   **Hybrid Integration**: Combines deterministic API calls (to get schema) with AI-driven mapping (to fill schema).
+    *   **Notion Mapper Agent**: Uses a `pydantic-ai` agent (`src/webtonotion/services/analysis/notion_mapper.py`) to intelligently map video metadata (title, transcript, sentiment) to the user's specific database properties, handling naming variations (e.g., "URL" vs "Link").
+    *   **Official Client**: Uses `notion-client` for all API interactions.
+    *   **Resilience**: Includes rate limiting and robust error handling.
 
 **4. Monitoring Service (`monitoring_service.py`)**
 

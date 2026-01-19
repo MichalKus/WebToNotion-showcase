@@ -16,7 +16,9 @@ from webtonotion.exceptions import (
     VideoScrapingError,
     WebToNotionError,
 )
+from webtonotion.models.notion import NotionPageResponse
 from webtonotion.models.request import ProcessURLRequest
+from webtonotion.models.video import VideoContent
 from webtonotion.services.notion_service import NotionService
 from webtonotion.services.video_scraping_service import VideoScrapingService
 
@@ -57,48 +59,35 @@ async def process_url(
     logger.info(f"Processing URL request: {request.url}")
 
     try:
-        # Check if the URL is a video URL
-        ##if video_service.is_video_url(request.url):
-        logger.info(f"Detected video URL: {request.url}")
+        db_schema = await _validate_request_and_get_db_schema(
+            request=request,
+            notion_service=notion_service,
+            video_service=video_service,
+        )
+
+        logger.info(f"Confirmed video URL: {request.url}")
 
         # Process video content
+        logger.info("Starting video content extraction...")
         video_content = await video_service.process_video(request.url)
 
         logger.info(
-            f"Video content fields: title='{video_content.title}', duration='{video_content.duration}', author='{video_content.author}', topics={video_content.topics}"
+            f"Video content extracted successfully: title='{video_content.title}', "
+            f"duration='{video_content.duration}', author='{video_content.author}', "
+            f"topics={video_content.topics}, sentiment='{video_content.sentiment}'"
         )
 
-        # Create Notion page
-        # page_response = await notion_service.create_video_page(
-        #     database_id=request.database_id,
-        #     custom_properties=request.custom_properties,
-        #     video_content=video_content,
-        # )
+        # Create Notion page with video content
+        logger.info(f"Creating Notion page in database: {request.database_id}")
+        page_response = await notion_service.create_video_page(
+            database_id=request.database_id,
+            video_content=video_content,
+            db_schema=db_schema,
+        )
+        logger.info(f"Notion page created successfully: {page_response.id}")
 
-        return {
-            "success": True,
-            "message": "Video URL processed successfully",
-            # "page_id": page_response.id,
-            # "page_url": page_response.url,
-            # "content_type": "video",
-            # "video_details": {
-            #     "title": video_content.title,
-            #     "duration": video_content.duration,
-            #     "author": video_content.author,
-            #     "topics": video_content.topics,
-            # }
-        }
-    # else:
-    #     # For non-video URLs, return a placeholder response
-    #     # This would be implemented with web scraping service in the future
-    #     logger.info(f"Non-video URL detected: {request.url}")
-
-    #     return {
-    #         "success": False,
-    #         "message": "Non-video URL processing not yet implemented",
-    #         "content_type": "web_page",
-    #         "url": request.url
-    #     }
+        # Return comprehensive success response
+        return _build_success_response(page_response=page_response, video_content=video_content)
 
     except VideoScrapingError as e:
         logger.error(f"Video scraping error for URL {request.url}: {e}")
@@ -122,8 +111,11 @@ async def process_url(
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Processing error: {str(e)}"
         )
+    except HTTPException:
+        # Re-raise HTTP exceptions without modification
+        raise
     except Exception as e:
-        logger.error(f"Unexpected error processing URL {request.url}: {e}")
+        logger.error(f"Unexpected error processing URL {request.url}: {e}", exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="An unexpected error occurred while processing the URL",
@@ -155,3 +147,86 @@ async def get_processing_status() -> Dict[str, Any]:
             "twitch.tv",
         ],
     }
+
+
+def _build_success_response(
+    page_response: NotionPageResponse,
+    video_content: VideoContent,
+) -> Dict[str, Any]:
+    """Build the success response for URL processing.
+
+    Args:
+        page_response: The Notion page creation response
+        video_content: The extracted video content
+
+    Returns:
+        Dict[str, Any]: Complete success response with all details
+    """
+    return {
+        "success": True,
+        "message": "Video URL processed and Notion page created successfully",
+        "page_id": page_response.id,
+        "page_url": page_response.url,
+        "content_type": "video",
+        "video_details": {
+            "title": video_content.title,
+            "duration": video_content.duration,
+            "author": video_content.author,
+            "topics": video_content.topics,
+            "sentiment": video_content.sentiment,
+            "locations": video_content.locations,
+            "transcript_length": len(video_content.transcript) if video_content.transcript else 0,
+            "metadata": video_content.metadata,
+        },
+        "processing_stats": {
+            "transcription_available": bool(video_content.transcript),
+            "ai_analysis_completed": bool(video_content.topics),
+            "cache_hit": False,  # This could be enhanced with cache checking
+        },
+    }
+
+
+async def _validate_request_and_get_db_schema(
+    request: ProcessURLRequest,
+    notion_service: NotionService,
+    video_service: VideoScrapingService,
+) -> Dict[str, Any]:
+    """Validate the request and fetch the Notion database schema.
+
+    This helper function performs initial validation of the processing request:
+    - Validates that a database ID is provided
+    - Fetches the Notion database schema to verify access
+    - Confirms the URL is a supported video URL
+
+    Args:
+        request: The URL processing request containing URL and database ID
+        notion_service: Service for Notion API interactions
+        video_service: Service for video URL validation
+
+    Returns:
+        Dict[str, Any]: The Notion database schema
+
+    Raises:
+        HTTPException: If database ID is missing (400) or URL is not a video (400)
+    """
+    if not request.database_id:
+        logger.error("Database ID is required for creating Notion pages")
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Database ID is required to create a Notion page",
+        )
+
+    logger.info(f"Validating database access and fetching schema for ID: {request.database_id}")
+    db_schema = await notion_service.get_database_properties(request.database_id)
+
+    logger.info(f"Checking if URL is a video URL: {request.url}")
+    is_video = await video_service.is_video_url(request.url)
+
+    if not is_video:
+        logger.error(f"Non-video URL detected: {request.url}")
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Only video URLs are supported for processing",
+        )
+
+    return db_schema

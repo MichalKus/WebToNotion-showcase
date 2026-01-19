@@ -4,6 +4,7 @@ This module provides comprehensive integration with the Notion API, including
 database management, page creation, and error handling with rate limiting.
 """
 
+import json
 import logging
 from datetime import datetime
 from typing import Any, Dict, List, Optional
@@ -23,6 +24,8 @@ from webtonotion.exceptions import (
 )
 from webtonotion.models.notion import NotionDatabase, NotionPage, NotionPageResponse
 from webtonotion.models.video import VideoContent
+from webtonotion.services.analysis.notion_mapper import MapperDependencies, notion_mapper_agent
+from webtonotion.utils import clean_json
 from webtonotion.utils.rate_limiter import RateLimiter
 
 logger = logging.getLogger(__name__)
@@ -156,64 +159,6 @@ class NotionService:
             logger.error(f"Failed to get databases: {e}")
             await self._handle_api_error(e)
 
-    def format_video_properties(
-        self, video_content: VideoContent, custom_properties: Dict[str, Any] = None
-    ) -> Dict[str, Any]:
-        """Convert VideoContent to Notion page properties.
-
-        Args:
-            video_content: Processed video content
-            custom_properties: Additional custom properties to include
-
-        Returns:
-            Dict[str, Any]: Notion-formatted properties
-        """
-        properties = {
-            "Title": {"title": [{"text": {"content": video_content.title or "Untitled Video"}}]},
-            "URL": {"url": video_content.url},
-            "Author": {"rich_text": [{"text": {"content": video_content.author or "Unknown"}}]},
-            "Duration": {
-                "rich_text": [
-                    {
-                        "text": {
-                            "content": (
-                                str(video_content.duration) if video_content.duration else "N/A"
-                            )
-                        }
-                    }
-                ]
-            },
-            "Published At": {
-                "date": (
-                    {"start": video_content.published_at.isoformat()}
-                    if video_content.published_at
-                    else None
-                )
-            },
-            "Topics": {
-                "multi_select": (
-                    [{"name": topic} for topic in video_content.topics]
-                    if video_content.topics
-                    else []
-                )
-            },
-            "Sentiment": {
-                "rich_text": [{"text": {"content": video_content.sentiment or "Neutral"}}]
-            },
-            "Locations": {
-                "multi_select": (
-                    [{"name": location} for location in video_content.locations]
-                    if video_content.locations
-                    else []
-                )
-            },
-        }
-
-        if custom_properties:
-            properties.update(custom_properties)
-
-        return properties
-
     async def create_page(
         self,
         database_id: str,
@@ -291,24 +236,67 @@ class NotionService:
     async def create_video_page(
         self,
         database_id: str,
-        custom_properties: Dict[str, Any],
         video_content: VideoContent,
+        db_schema: Optional[Dict[str, Any]] = None,
     ) -> NotionPageResponse:
-        """Create a new page with video content in the specified database.
+        """Create a new page with video content in the specified database."""
+        try:
+            if db_schema is None:
+                db_schema = await self.get_database_properties(database_id)
 
-        Args:
-            database_id: ID of the target database
-            properties: Page properties matching the database schema
-            video_content: Processed video content
+            deps = MapperDependencies()
+            deps.schema = db_schema
+            deps.database_id = database_id
 
-        Returns:
-            NotionPageResponse with created page information
-        """
-        children = self.format_video_page_content(video_content)
-        properties = self.format_video_properties(video_content, custom_properties)
-        return await self.create_page(
-            database_id=database_id, properties=properties, children=children
-        )
+            logger.info(f"Invoking NotionMapperAgent for database {database_id}")
+
+            # Create a descriptive prompt for the agent based on video content
+            prompt = f"""Map this video content to the Notion database schema:
+                Video Title: {video_content.title}
+                Video Author: {video_content.author}
+                Video URL: {video_content.url}
+                Video Description: {video_content.description}
+                Video Duration: {video_content.duration} seconds
+                Published At: {video_content.published_at}
+                Transcript: {video_content.transcript[:500]}...  # First 500 chars of transcript
+                Topics: {', '.join(video_content.topics)}
+                Sentiment: {video_content.sentiment}
+                Locations: {', '.join(video_content.locations) if video_content.locations else 'None'}
+                Metadata: {video_content.metadata}
+
+            Please analyze this video content and create a Notion page payload that maps all relevant information to the provided database schema."""
+
+            result = await notion_mapper_agent.run(prompt, deps=deps)
+            agent_response = result.output
+            logger.debug(f"Agent response: {agent_response}")
+
+            try:
+                cleaned_response = clean_json(agent_response)
+                page_data = json.loads(cleaned_response)
+                logger.info(f"Page data: {page_data}")
+
+            except json.JSONDecodeError as e:
+                raise ValueError(f"Agent returned invalid JSON: {e}")
+
+            # # Filter out empty property values (e.g. properties that serialized to {})
+            # # This is crucial because Pydantic's exclude_none=True can leave empty dicts
+            # # for optional fields like 'select', 'date', etc., which Notion rejects.
+            if "properties" in page_data:
+                page_data["properties"] = {
+                    k: v
+                    for k, v in page_data["properties"].items()
+                    if v  # Keep only non-empty values
+                }
+
+            return await self.create_page(
+                database_id=database_id,
+                properties=page_data["properties"],
+                children=page_data.get("children"),
+            )
+
+        except Exception as e:
+            logger.error(f"Failed to create video page via AI Agent: {e}")
+            await self._handle_api_error(e)
 
     async def get_database_properties(self, database_id: str) -> Dict[str, Any]:
         """Get the properties schema for a specific database.
@@ -327,110 +315,27 @@ class NotionService:
         await self.rate_limiter.wait_if_needed()
 
         try:
+            # First get database details
             logger.info(f"Fetching properties for database {database_id}")
-            response = self.client.databases.retrieve(database_id)
+            database_details = self.client.databases.retrieve(
+                database_id,
+            )
+            logger.debug(f"Database details: {database_details}")
 
-            properties = response.get("properties", {})
-            logger.info(f"Retrieved {len(properties)} properties for database {database_id}")
+            # Retrieve data source from database details
+            data_sources = database_details.get("data_sources", [])
+            data_source_id = data_sources[0]["id"]
+            logger.debug(f"Data source ID: {data_source_id}")
+
+            # Now get properties from the data source
+            ds_info = self.client.data_sources.retrieve(data_source_id=data_source_id)
+            properties = ds_info["properties"]
+            logger.info(f"Found {len(properties)} properties in data source")
 
             return properties
-
         except Exception as e:
             logger.error(f"Failed to get database properties for {database_id}: {e}")
             await self._handle_api_error(e)
-
-    def format_video_page_content(self, video_content: VideoContent) -> list:
-        """Create Notion page content blocks for video content.
-
-        Args:
-            video_content: Processed video content
-
-        Returns:
-            list: List of Notion content blocks
-        """
-        blocks = []
-
-        # Add description if available
-        if video_content.description:
-            blocks.append(
-                {
-                    "object": "block",
-                    "type": "paragraph",
-                    "paragraph": {
-                        "rich_text": [
-                            {"type": "text", "text": {"content": video_content.description}}
-                        ]
-                    },
-                }
-            )
-
-        # Add transcript if available
-        if video_content.transcript:
-            blocks.extend(
-                [
-                    {
-                        "object": "block",
-                        "type": "heading_2",
-                        "heading_2": {
-                            "rich_text": [{"type": "text", "text": {"content": "Transcript"}}]
-                        },
-                    },
-                    {
-                        "object": "block",
-                        "type": "paragraph",
-                        "paragraph": {
-                            "rich_text": [
-                                {"type": "text", "text": {"content": video_content.transcript}}
-                            ]
-                        },
-                    },
-                ]
-            )
-
-        # Add locations if available
-        if video_content.locations:
-            blocks.extend(
-                [
-                    {
-                        "object": "block",
-                        "type": "heading_3",
-                        "heading_3": {
-                            "rich_text": [
-                                {"type": "text", "text": {"content": "Locations Mentioned"}}
-                            ]
-                        },
-                    },
-                    {
-                        "object": "block",
-                        "type": "bulleted_list_item",
-                        "bulleted_list_item": {
-                            "rich_text": [
-                                {
-                                    "type": "text",
-                                    "text": {"content": ", ".join(video_content.locations)},
-                                }
-                            ]
-                        },
-                    },
-                ]
-            )
-
-        return blocks
-
-    async def validate_database_access(self, database_id: str) -> bool:
-        """Validate that the integration has access to a specific database.
-
-        Args:
-            database_id: ID of the database to validate
-
-        Returns:
-            True if database is accessible, False otherwise
-        """
-        try:
-            await self.get_database_properties(database_id)
-            return True
-        except NotionAPIError:
-            return False
 
     async def health_check(self) -> bool:
         """Check if the Notion API is accessible and responding.
@@ -446,107 +351,3 @@ class NotionService:
         except Exception as e:
             logger.warning(f"Health check failed: {e}")
             return False
-
-    def format_page_properties(self, content: Dict[str, Any]) -> Dict[str, Any]:
-        """Format content dictionary into Notion page properties.
-
-        This method maps content fields to appropriate Notion property formats
-        based on common naming conventions.
-
-        Args:
-            content: Dictionary of content to format
-
-        Returns:
-            Dictionary of formatted Notion properties
-        """
-        properties = {}
-
-        # Map common field names to Notion property types
-        property_mapping = {
-            "title": "title",
-            "name": "title",
-            "url": "url",
-            "link": "url",
-            "description": "rich_text",
-            "content": "rich_text",
-            "summary": "rich_text",
-            "author": "rich_text",
-            "creator": "rich_text",
-            "duration": "number",
-            "length": "number",
-            "count": "number",
-            "tags": "multi_select",
-            "categories": "multi_select",
-            "topics": "multi_select",
-            "email": "email",
-            "phone": "phone_number",
-            "published": "date",
-            "published_date": "date",
-            "date": "date",
-            "completed": "checkbox",
-            "done": "checkbox",
-            "active": "checkbox",
-        }
-
-        # Format each content field according to mapping
-        for key, value in content.items():
-            # Convert key to title case for Notion property name
-            property_name = key.replace("_", " ").title()
-
-            # Determine property type based on mapping or default to rich_text
-            property_type = property_mapping.get(key.lower(), "rich_text")
-
-            # Format the property
-            properties[property_name] = self.format_property_for_notion(property_type, value)
-
-        return properties
-
-    def format_property_for_notion(self, property_type: str, value: Any) -> Dict[str, Any]:
-        """Format a value according to Notion property type requirements.
-
-        Args:
-            property_type: The Notion property type (title, rich_text, number, etc.)
-            value: The value to format
-
-        Returns:
-            Formatted property value for Notion API
-        """
-        if property_type == "title":
-            return {"title": [{"text": {"content": str(value)[:2000]}}]}  # Notion title limit
-        elif property_type == "rich_text":
-            return {"rich_text": [{"text": {"content": str(value)[:2000]}}]}  # Notion text limit
-        elif property_type == "number":
-            try:
-                return {"number": float(value)}
-            except (ValueError, TypeError):
-                return {"number": None}
-        elif property_type == "select":
-            return {"select": {"name": str(value)[:100]}}  # Select option limit
-        elif property_type == "multi_select":
-            if isinstance(value, (list, tuple)):
-                return {
-                    "multi_select": [
-                        {"name": str(item)[:100]} for item in value[:10]  # Max 10 options
-                    ]
-                }
-            else:
-                return {"multi_select": [{"name": str(value)[:100]}]}
-        elif property_type == "url":
-            return {"url": str(value) if value else None}
-        elif property_type == "email":
-            return {"email": str(value) if value else None}
-        elif property_type == "phone_number":
-            return {"phone_number": str(value) if value else None}
-        elif property_type == "date":
-            if isinstance(value, datetime):
-                return {"date": {"start": value.isoformat()}}
-            elif isinstance(value, str):
-                return {"date": {"start": value}}
-            else:
-                return {"date": None}
-        elif property_type == "checkbox":
-            return {"checkbox": bool(value)}
-        else:
-            # For unsupported types, try to convert to rich_text
-            logger.warning(f"Unsupported property type '{property_type}', converting to rich_text")
-            return {"rich_text": [{"text": {"content": str(value)[:2000]}}]}

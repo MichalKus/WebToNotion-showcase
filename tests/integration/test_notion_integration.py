@@ -6,8 +6,9 @@ valid Notion API credentials and should be run in a test environment.
 """
 
 import asyncio
+import json
 from datetime import datetime
-from unittest.mock import patch
+from unittest.mock import AsyncMock, patch
 
 import httpx
 import pytest
@@ -16,6 +17,7 @@ from notion_client.errors import APIResponseError
 from webtonotion.config.settings import Settings
 from webtonotion.exceptions import NotionAPIError, NotionAuthenticationError
 from webtonotion.models.notion import NotionDatabase
+from webtonotion.models.video import VideoContent
 from webtonotion.services.notion_service import NotionService
 
 
@@ -98,129 +100,79 @@ class TestNotionServiceIntegration:
             pytest.skip(f"API error during properties retrieval: {str(e)}")
 
     @pytest.mark.asyncio
-    async def test_rate_limiting_behavior(self, notion_service):
-        """Test that rate limiting works correctly with real API."""
-        # Make multiple rapid requests to test rate limiting
-        start_time = datetime.now()
-
+    async def test_create_video_page_flow(self, notion_service):
+        """Test the full video page creation flow with mocked agent but real Notion API."""
         try:
-            # Make several health check requests rapidly
-            tasks = [notion_service.health_check() for _ in range(5)]
-            results = await asyncio.gather(*tasks)
-
-            end_time = datetime.now()
-            duration = (end_time - start_time).total_seconds()
-
-            # All requests should succeed
-            assert all(results)
-
-            # With rate limiting, this should take some time
-            # (though exact timing depends on API response times)
-            assert duration >= 0  # Basic sanity check
-
-        except NotionAPIError as e:
-            pytest.skip(f"API error during rate limiting test: {str(e)}")
-
-    @pytest.mark.asyncio
-    async def test_format_page_properties_integration(self, notion_service):
-        """Test property formatting with realistic content."""
-        content = {
-            "title": "Integration Test Video",
-            "url": "https://www.youtube.com/watch?v=dQw4w9WgXcQ",
-            "description": "This is a test video for integration testing",
-            "author": "Test Author",
-            "duration": 212,
-            "tags": ["test", "integration", "video"],
-            "published_date": "2024-01-01",
-        }
-
-        properties = notion_service.format_page_properties(content)
-
-        # Verify all expected properties are formatted correctly
-        assert "Title" in properties
-        assert "Url" in properties
-        assert "Description" in properties
-        assert "Author" in properties
-        assert "Duration" in properties
-        assert "Tags" in properties
-        assert "Published Date" in properties
-
-        # Verify the structure matches Notion API expectations
-        assert properties["Title"]["title"][0]["text"]["content"] == content["title"]
-        assert properties["Url"]["url"] == content["url"]
-        assert properties["Duration"]["number"] == content["duration"]
-        assert len(properties["Tags"]["multi_select"]) == len(content["tags"])
-
-
-@pytest.mark.integration
-@pytest.mark.slow
-class TestNotionServiceEndToEnd:
-    """End-to-end integration tests for complete workflows."""
-
-    @pytest.fixture(scope="class")
-    def settings(self):
-        """Create settings for E2E testing."""
-        return Settings()
-
-    @pytest.fixture(scope="class")
-    def notion_service(self, settings):
-        """Create NotionService for E2E testing."""
-        if not settings.notion_api_key:
-            pytest.skip("Notion API key not configured for E2E tests")
-
-        return NotionService(settings)
-
-    @pytest.mark.asyncio
-    async def test_complete_workflow_simulation(self, notion_service):
-        """Test a complete workflow: get databases -> format properties -> create page."""
-        try:
-            # Step 1: Get available databases
+            # 1. Get real databases
             databases = await notion_service.get_databases()
-
             if not databases:
-                pytest.skip("No databases available for E2E testing")
+                pytest.skip("No databases available for integration test")
 
-            # Step 2: Get properties for the first database
             test_db = databases[0]
-            db_properties = await notion_service.get_database_properties(test_db.id)
 
-            # Step 3: Format content for page creation
-            test_content = {
-                "title": f"E2E Test - {datetime.now().isoformat()}",
-                "url": "https://example.com/test-video",
-                "description": "End-to-end integration test content",
+            # 2. Get real properties to identify the title field
+            properties = await notion_service.get_database_properties(test_db.id)
+
+            # Find the title property (required for creating a page)
+            title_prop = next((k for k, v in properties.items() if v.get("type") == "title"), None)
+
+            if not title_prop:
+                pytest.skip(
+                    f"Database {test_db.id} has no title property, cannot test page creation"
+                )
+
+            # 3. Create a valid payload using the real title property name
+            mock_payload = {
+                "parent": {"database_id": test_db.id},
+                "properties": {
+                    title_prop: {"title": [{"text": {"content": "Integration Test Video"}}]}
+                },
+                "children": [
+                    {
+                        "object": "block",
+                        "type": "paragraph",
+                        "paragraph": {
+                            "rich_text": [
+                                {
+                                    "type": "text",
+                                    "text": {"content": "Created via integration test"},
+                                }
+                            ]
+                        },
+                    }
+                ],
             }
 
-            formatted_properties = notion_service.format_page_properties(test_content)
+            mock_agent_result = AsyncMock()
+            mock_agent_result.output = json.dumps(mock_payload)
 
-            # Verify the workflow completed successfully
-            assert isinstance(databases, list)
-            assert len(databases) > 0
-            assert isinstance(db_properties, dict)
-            assert isinstance(formatted_properties, dict)
-            assert "Title" in formatted_properties
+            video_content = VideoContent(
+                url="https://example.com",
+                title="Integration Test",
+                author="Test",
+                duration=100,
+                transcript="Test",
+            )
 
-            # Note: We don't actually create a page in the test to avoid
-            # cluttering the test Notion workspace
+            # Patch the agent to avoid LLM calls
+            with patch(
+                "webtonotion.services.notion_service.notion_mapper_agent.run",
+                new_callable=AsyncMock,
+            ) as mock_run:
+                mock_run.return_value = mock_agent_result
+
+                # Execute the service method
+                # This tests: get_database_properties (Real) -> Agent (Mocked) -> create_page (Real)
+                result = await notion_service.create_video_page(test_db.id, video_content)
+
+                assert result.success is True
+                assert result.id is not None
+
+                # Optional: Verify the page was actually created if we wanted to be thorough,
+                # but result.success=True from the API client is usually enough.
 
         except NotionAPIError as e:
-            pytest.skip(f"API error during E2E workflow: {str(e)}")
-
-
-# Utility functions for integration testing
-def requires_notion_api():
-    """Decorator to skip tests if Notion API is not available."""
-
-    def decorator(func):
-        def wrapper(*args, **kwargs):
-            settings = Settings()
-            if not settings.notion_api_key:
-                pytest.skip("Notion API key not configured")
-            return func(*args, **kwargs)
-
-        return wrapper
-
-    return decorator
+            pytest.skip(f"API error during integration test: {e}")
 
 
 @pytest.mark.integration

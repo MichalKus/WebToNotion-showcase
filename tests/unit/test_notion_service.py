@@ -5,7 +5,9 @@ including tests for rate limiting, database operations, page creation,
 and error handling.
 """
 
-from unittest.mock import Mock, patch
+import json
+from datetime import datetime
+from unittest.mock import AsyncMock, Mock, patch
 
 import pytest
 from notion_client.errors import APIResponseError
@@ -16,6 +18,7 @@ from webtonotion.exceptions import (
     NotionAuthenticationError,
     NotionRateLimitError,
 )
+from webtonotion.models.video import VideoContent
 from webtonotion.services.notion_service import (
     NotionService,
     RateLimiter,
@@ -36,11 +39,11 @@ def notion_service(settings):
 
 def create_test_service():
     """Helper function to create a NotionService instance for testing."""
-    from unittest.mock import Mock
-
     mock_settings = Mock()
     mock_settings.notion_api_key = "test_key"
     mock_settings.notion_version = "2025-09-03"
+    mock_settings.openrouter_api_key = "test_openrouter_key"
+    mock_settings.openrouter_model = "test_model"
     return NotionService(mock_settings)
 
 
@@ -134,8 +137,8 @@ class TestNotionService:
                 await service.get_databases()
 
     @pytest.mark.asyncio
-    async def test_create_page_with_children_success(self):
-        """Test successful page creation with children content blocks."""
+    async def test_create_page_success(self):
+        """Test successful page creation."""
         service = create_test_service()
 
         # Test data
@@ -169,7 +172,7 @@ class TestNotionService:
         with patch.object(service.client.pages, "create") as mock_create:
             mock_create.return_value = mock_response
 
-            result = await service.create_page(database_id, properties, children=children)
+            result = await service.create_page(database_id, properties, children)
 
             # Verify the result is a NotionPageResponse object
             assert result.id == "page_id"
@@ -185,50 +188,102 @@ class TestNotionService:
             assert call_args["children"] == children
 
     @pytest.mark.asyncio
-    async def test_create_page_api_error(self):
-        """Test page creation with API error."""
+    async def test_create_video_page_success(self):
+        """Test successful video page creation using the agent."""
         service = create_test_service()
 
-        with patch.object(service.client.pages, "create") as mock_create:
-            mock_response = Mock()
-            mock_response.status = 400
-            mock_error = APIResponseError(
-                response=mock_response, code="bad_request", message="Bad request"
-            )
-            mock_error.code = "bad_request"
-            mock_create.side_effect = mock_error
+        # Test data
+        database_id = "test_db_id"
+        video_content = VideoContent(
+            url="https://example.com",
+            title="Test Video",
+            author="Test Author",
+            duration=120,
+            published_at=datetime(2023, 1, 1),
+            transcript="Test transcript",
+            topics=["test"],
+            sentiment="positive",
+        )
 
-            with pytest.raises(NotionAPIError):
-                await service.create_page(
-                    database_id="test_db",
-                    properties={"title": {"title": [{"text": {"content": "Test Page"}}]}},
-                )
+        # Mock database schema
+        db_schema = {"Name": {"type": "title"}, "URL": {"type": "url"}}
+
+        # Mock agent response
+        agent_output_json = json.dumps(
+            {
+                "parent": {"database_id": database_id},
+                "properties": {
+                    "Name": {"title": [{"text": {"content": "Test Video"}}]},
+                    "URL": {"url": "https://example.com"},
+                },
+                "children": [],
+            }
+        )
+
+        mock_agent_result = Mock()
+        mock_agent_result.output = agent_output_json
+
+        # Mock create_page response
+        mock_page_response = Mock()
+        mock_page_response.id = "new_page_id"
+        mock_page_response.success = True
+
+        # Patch the dependencies
+        with (
+            patch(
+                "webtonotion.services.notion_service.notion_mapper_agent.run",
+                new_callable=AsyncMock,
+            ) as mock_agent_run,
+            patch.object(
+                service, "get_database_properties", new_callable=AsyncMock
+            ) as mock_get_props,
+            patch.object(service, "create_page", new_callable=AsyncMock) as mock_create_page,
+        ):
+
+            mock_get_props.return_value = db_schema
+            mock_agent_run.return_value = mock_agent_result
+            mock_create_page.return_value = mock_page_response
+
+            result = await service.create_video_page(database_id, video_content)
+
+            assert result == mock_page_response
+
+            # Verify interactions
+            mock_get_props.assert_called_once_with(database_id)
+            mock_agent_run.assert_called_once()
+            mock_create_page.assert_called_once()
+
+            # Verify create_page was called with correct data
+            call_args = mock_create_page.call_args
+            assert call_args[1]["database_id"] == database_id
+            assert "Name" in call_args[1]["properties"]
 
     @pytest.mark.asyncio
-    async def test_format_page_properties(self):
-        """Test page properties formatting."""
+    async def test_create_video_page_agent_invalid_json(self):
+        """Test video page creation when agent returns invalid JSON."""
         service = create_test_service()
 
-        content = {
-            "title": "Test Page",
-            "url": "https://example.com",
-            "description": "Test description",
-        }
+        video_content = VideoContent(
+            url="https://example.com", title="Test", author="Test", duration=0, transcript=""
+        )
 
-        result = service.format_page_properties(content)
+        # Mock agent returning invalid JSON
+        mock_agent_result = Mock()
+        mock_agent_result.output = "Invalid JSON"
 
-        assert "Title" in result
-        assert result["Title"]["title"][0]["text"]["content"] == "Test Page"
-        assert "Url" in result
-        assert result["Url"]["url"] == "https://example.com"
-        assert "Description" in result
-        assert result["Description"]["rich_text"][0]["text"]["content"] == "Test description"
+        with (
+            patch(
+                "webtonotion.services.notion_service.notion_mapper_agent.run",
+                new_callable=AsyncMock,
+            ) as mock_agent_run,
+            patch.object(
+                service, "get_database_properties", new_callable=AsyncMock
+            ) as mock_get_props,
+        ):
 
-    def test_format_page_properties_empty(self):
-        """Test page properties formatting with empty content."""
-        service = create_test_service()
+            mock_get_props.return_value = {}
+            mock_agent_run.return_value = mock_agent_result
 
-        result = service.format_page_properties({})
-
-        # Should return empty dict for empty input
-        assert result == {}
+            # Should raise NotionAPIError (wrapping the ValueError from JSON parsing)
+            with pytest.raises(NotionAPIError):
+                await service.create_video_page("db_id", video_content)
