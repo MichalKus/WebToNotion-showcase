@@ -30,6 +30,20 @@ class VideoScrapingService(LoggerMixin):
     structured outputs.
     """
 
+    # Supported video platforms
+    VIDEO_PLATFORM_PATTERNS = [
+        "youtube.com",
+        "youtu.be",
+        "vimeo.com",
+        "dailymotion.com",
+        "twitch.tv",
+        "facebook.com/watch",
+        "instagram.com/reel",
+        "tiktok.com",
+        "twitter.com",
+        "x.com",
+    ]
+
     def __init__(self) -> None:
         """Initialize the video scraping service."""
         # Initialize clients and sub-services
@@ -42,6 +56,25 @@ class VideoScrapingService(LoggerMixin):
         self.logger.info(
             "VideoScrapingService initialized successfully with modern PydanticAI structured outputs"
         )
+
+    async def is_video_url(self, url: HttpUrl) -> bool:
+        """Check if the provided URL is from a supported video platform.
+
+        Args:
+            url: URL to check
+
+        Returns:
+            True if URL is from a supported video platform, False otherwise
+        """
+        url_str = str(url).lower()
+
+        for pattern in self.VIDEO_PLATFORM_PATTERNS:
+            if pattern.lower() in url_str:
+                self.logger.info(f"Detected video platform: {pattern}")
+                return True
+
+        self.logger.info(f"URL does not match any supported video platforms: {url}")
+        return False
 
     async def process_video(self, url: HttpUrl) -> VideoContent:
         """Process a video URL and extract comprehensive content.

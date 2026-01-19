@@ -16,7 +16,6 @@ class ProcessURLRequest(BaseModel):
     Attributes:
         url: The video URL to be processed (must be a valid HTTP/HTTPS URL)
         database_id: Optional Notion database ID to override default target
-        custom_properties: Optional additional properties to include in the Notion page
     """
 
     model_config = ConfigDict(
@@ -24,7 +23,6 @@ class ProcessURLRequest(BaseModel):
             "example": {
                 "url": "https://www.youtube.com/watch?v=dQw4w9WgXcQ",
                 "database_id": "12345678-1234-1234-1234-123456789012",
-                "custom_properties": {"Priority": "High", "Category": "Music"},
             }
         }
     )
@@ -34,7 +32,4 @@ class ProcessURLRequest(BaseModel):
     )
     database_id: str | None = Field(
         default=None, description="Target Notion database ID (optional)"
-    )
-    custom_properties: dict[str, str | int | float | bool] | None = Field(
-        default=None, description="Additional properties to include in the Notion page"
     )

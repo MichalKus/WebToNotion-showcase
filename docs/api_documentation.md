@@ -30,10 +30,7 @@ Process any supported URL and create a corresponding Notion page.
 ```json
 {
   "url": "string",                    // Required: URL to process
-  "database_id": "string",            // Required: Notion database ID
-  "custom_properties": {              // Optional: Additional properties
-    "key": "value"
-  }
+  "database_id": "string"             // Required: Notion database ID
 }
 ```
 
@@ -43,7 +40,6 @@ Process any supported URL and create a corresponding Notion page.
 |-----------|------|----------|-------------|
 | `url` | string | Yes | The URL to process. Must be a valid HTTP/HTTPS URL |
 | `database_id` | string | Yes | The Notion database ID where the page will be created |
-| `custom_properties` | object | No | Additional custom properties to include in the Notion page |
 
 #### Response
 
@@ -54,25 +50,27 @@ The response format depends on the type of content processed:
 ```json
 {
   "success": true,
-  "message": "Video URL processed successfully",
+  "message": "Video URL processed and Notion page created successfully",
   "page_id": "string",
   "page_url": "string",
   "content_type": "video",
-  "url": "string",
   "video_details": {
     "title": "string",
-    "description": "string",
-    "author": "string",
     "duration": 300,
-    "published_at": "2024-01-15T10:30:00",
+    "author": "string",
     "topics": ["topic1", "topic2"],
     "sentiment": "positive|negative|neutral",
     "locations": ["location1", "location2"],
-    "transcript_preview": "string",
+    "transcript_length": 1500,
     "metadata": {
-      "quality": "720p",
-      "language": "en"
+      "key_insights": "string (json)",
+      "content_category": "string"
     }
+  },
+  "processing_stats": {
+    "transcription_available": true,
+    "ai_analysis_completed": true,
+    "cache_hit": false
   }
 }
 ```
