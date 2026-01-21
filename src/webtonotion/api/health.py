@@ -10,7 +10,7 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel
 
 from webtonotion.config.settings import Settings
-from webtonotion.dependencies import get_notion_service, get_settings
+from webtonotion.dependencies import get_notion_service, get_settings, verify_api_key
 from webtonotion.exceptions import NotionAPIError, NotionAuthenticationError
 from webtonotion.services.notion_service import NotionService
 
@@ -71,6 +71,7 @@ async def health_check(
     "/status",
     response_model=SystemStatusResponse,
     status_code=status.HTTP_200_OK,
+    dependencies=[Depends(verify_api_key)],
 )
 async def system_status(
     app_settings: Annotated[Settings, Depends(get_settings)],
