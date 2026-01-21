@@ -237,6 +237,10 @@ class Settings(BaseSettings):
 
     workers: int = Field(default=1, description="Number of worker processes", ge=1)
 
+    forwarded_allow_ips: str = Field(
+        default="*", description="Comma separated list of IPs to trust as proxies"
+    )
+
 
 # Global instance of the settings
 settings = Settings()

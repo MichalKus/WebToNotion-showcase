@@ -8,15 +8,21 @@ import logging
 from contextlib import asynccontextmanager
 from typing import AsyncGenerator
 
-from fastapi import FastAPI
+from fastapi import Depends, FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.middleware.httpsredirect import HTTPSRedirectMiddleware
 from fastapi.middleware.trustedhost import TrustedHostMiddleware
 
 from webtonotion.api.health import router as health_router
-from webtonotion.api.middleware import ErrorHandlingMiddleware, RequestLoggingMiddleware
+from webtonotion.api.middleware import (
+    ErrorHandlingMiddleware,
+    RequestLoggingMiddleware,
+    SecurityHeadersMiddleware,
+)
 from webtonotion.api.process import router as process_router
 from webtonotion.config.logging import setup_logging
 from webtonotion.config.settings import settings
+from webtonotion.dependencies import create_rate_limit_dependency, verify_api_key
 
 
 @asynccontextmanager
@@ -57,8 +63,13 @@ def create_app() -> FastAPI:
     setup_logging(app)
 
     # Add middleware (order matters - first added is outermost)
+    app.add_middleware(SecurityHeadersMiddleware)
     app.add_middleware(ErrorHandlingMiddleware)
     app.add_middleware(RequestLoggingMiddleware)
+
+    # Enforce HTTPS in production
+    if settings.environment == "production":
+        app.add_middleware(HTTPSRedirectMiddleware)
 
     app.add_middleware(
         TrustedHostMiddleware,
@@ -73,7 +84,14 @@ def create_app() -> FastAPI:
         allow_headers=["*"],
     )
 
-    app.include_router(process_router, prefix="/api/v1")
+    # Create rate limit dependency
+    rate_limit_dep = create_rate_limit_dependency()
+
+    app.include_router(
+        process_router,
+        prefix="/api/v1",
+        dependencies=[Depends(verify_api_key), Depends(rate_limit_dep)],
+    )
     app.include_router(health_router, prefix="/api/v1")
 
     return app
@@ -89,4 +107,6 @@ if __name__ == "__main__":
         port=settings.port,
         log_level=settings.log_level.lower(),
         reload=settings.debug,
+        proxy_headers=True,  # Enable proxy headers support
+        forwarded_allow_ips=settings.forwarded_allow_ips,  # Trust proxies
     )

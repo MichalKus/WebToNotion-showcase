@@ -15,6 +15,8 @@ from fastapi.responses import JSONResponse
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.types import ASGIApp
 
+from webtonotion.config.settings import settings
+
 logger = logging.getLogger(__name__)
 
 
@@ -176,6 +178,74 @@ class RequestLoggingMiddleware(BaseHTTPMiddleware):
                 "request_id": request_id,
                 "response_headers": dict(response.headers),
                 "status_code": response.status_code,
+            },
+        )
+
+        return response
+
+
+class SecurityHeadersMiddleware(BaseHTTPMiddleware):
+    """Middleware to inject security headers into HTTP responses.
+
+    This middleware adds standard security headers to protect against:
+    - Cross-site scripting (XSS)
+    - Clickjacking attacks
+    - MIME-type sniffing
+    - Man-in-the-middle attacks
+    """
+
+    def __init__(self, app: ASGIApp) -> None:
+        super().__init__(app)
+
+    async def dispatch(self, request: Request, call_next: Callable) -> Response:
+        """Process request and add security headers to response."""
+        response = await call_next(request)
+
+        # Content Security Policy (CSP)
+        # Restricts sources for content loading to prevent XSS
+        csp_policy = (
+            "default-src 'self'; "
+            "script-src 'self' 'unsafe-inline' 'unsafe-eval' https://cdn.jsdelivr.net; "
+            "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com https://cdn.jsdelivr.net; "
+            "font-src 'self' https://fonts.gstatic.com; "
+            "img-src 'self' data: https:; "
+            "connect-src 'self' https://api.notion.com; "
+            "frame-ancestors 'none'; "
+            "base-uri 'self'; "
+            "form-action 'self'"
+        )
+        response.headers["Content-Security-Policy"] = csp_policy
+
+        # X-Content-Type-Options
+        # Prevents MIME-type sniffing
+        response.headers["X-Content-Type-Options"] = "nosniff"
+
+        # X-Frame-Options
+        # Prevents clickjacking by disallowing iframe embedding
+        response.headers["X-Frame-Options"] = "DENY"
+
+        # Strict-Transport-Security (HSTS)
+        # Forces HTTPS connections for a specified duration
+        if settings.environment == "production":
+            # 1 year max-age, include subdomains, preload for HSTS preload list
+            response.headers["Strict-Transport-Security"] = (
+                "max-age=31536000; includeSubDomains; preload"
+            )
+
+        # X-XSS-Protection
+        # Enables XSS filtering in browsers (legacy but still useful)
+        response.headers["X-XSS-Protection"] = "1; mode=block"
+
+        # Additional security headers
+        response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
+        response.headers["Permissions-Policy"] = "geolocation=(), microphone=(), camera=()"
+
+        logger.debug(
+            "Security headers added to response",
+            extra={
+                "request_id": getattr(request.state, "request_id", "unknown"),
+                "path": request.url.path,
+                "method": request.method,
             },
         )
 
