@@ -107,6 +107,73 @@ python -m webtonotion.main
 uvicorn webtonotion.main:create_app --host 0.0.0.0 --port 8000
 ```
 
+### 🐳 Docker
+
+**Build the image**:
+```bash
+docker build -t webtonotion -f docker/Dockerfile .
+```
+
+**Run the container**:
+```bash
+docker run -d \
+  -p 8000:8000 \
+  --env-file .env \
+  --name webtonotion \
+  webtonotion
+```
+
+The Docker configuration uses Gunicorn with Uvicorn workers, optimized for production environments.
+
+### ☁️ Deployment to VPS
+
+Deploying to a VPS (Virtual Private Server) is streamlined using Docker Compose.
+
+**Prerequisites**:
+- A VPS with SSH access.
+- [Docker](https://docs.docker.com/engine/install/) and [Docker Compose](https://docs.docker.com/compose/install/) installed on the server.
+
+**Step-by-Step Guide**:
+
+1. **Connect to your VPS**:
+   ```bash
+   ssh user@your-vps-ip
+   ```
+
+2. **Prepare the directory**:
+   ```bash
+   mkdir -p webtonotion
+   cd webtonotion
+   ```
+
+3. **Transfer project files**:
+   You can clone the repository or use `rsync`/`scp` to copy files from your local machine.
+   ```bash
+   git clone https://github.com/MichalKus/WebToNotion.git .
+   # OR use rsync from local machine:
+   # rsync -avz --exclude 'venv' . user@your-vps-ip:~/webtonotion/
+   ```
+
+4. **Configure Environment**:
+   Create a `.env` file with your production secrets:
+   ```bash
+   nano .env
+   ```
+   Ensure you set `COOKIES_FILE_PATH` (default: `/app/cookies.txt`) and other necessary variables.
+
+5. **Start the Service**:
+   Use the Docker Compose configuration located in the `docker` directory:
+   ```bash
+   docker-compose -f docker/docker-compose.yaml up -d
+   ```
+   This pulls the pre-built image `mikus67/webtonotion-vps` and starts the services.
+
+6. **Verify Deployment**:
+   ```bash
+   docker-compose -f docker/docker-compose.yaml ps
+   curl http://localhost:8000/api/v1/health
+   ```
+
 ### API Endpoints
 
 #### Process URL

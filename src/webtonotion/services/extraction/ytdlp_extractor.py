@@ -32,13 +32,15 @@ class YtDlpExtractor(VideoExtractor, LoggerMixin):
             "extractaudio": True,
             "audioformat": "mp3",
             "audioquality": self._get_audio_quality_value(settings.audio_quality),
-            "no_warnings": not self.verbose_logging,
-            "quiet": not self.verbose_logging,
+            "no_warnings": False,
+            "quiet": False,
             "max_filesize": self._parse_file_size(settings.max_file_size),
-            # Add options to bypass restrictions
+            "verbose": self.verbose_logging,
+            "remote_components": ["ejs:github"],
             "nocheckcertificate": True,
             "dump_pages": True,
             "ignoreerrors": True,
+            "ignore_no_formats_error": True,
             "geo_bypass": True,
             "http_headers": {
                 "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36",
@@ -46,6 +48,15 @@ class YtDlpExtractor(VideoExtractor, LoggerMixin):
                 "Accept-Language": "en-us,en;q=0.5",
             },
         }
+
+        # Add cookies file if configured
+        if settings.cookies_file_path:
+            cookie_path = Path(settings.cookies_file_path)
+            if cookie_path.exists():
+                self.yt_dlp_opts["cookiefile"] = str(cookie_path)
+                self.logger.info(f"Using cookies file: {cookie_path}")
+            else:
+                self.logger.warning(f"Cookies file configured but not found: {cookie_path}")
 
     def _parse_file_size(self, size_str: str) -> int:
         """Parse file size string (e.g., '100MB') into bytes."""
@@ -78,7 +89,7 @@ class YtDlpExtractor(VideoExtractor, LoggerMixin):
 
     async def extract(self, url: str) -> ExtractionData:
         """Extract video content using yt-dlp."""
-        self.logger.info(f"Extracting video metadata with yt-dlp for: {url}")
+        self.logger.info(f"Extracting video metadata with use of yt-dlp")
 
         try:
             # Extract metadata first
@@ -88,7 +99,17 @@ class YtDlpExtractor(VideoExtractor, LoggerMixin):
             if not info:
                 raise VideoScrapingError("Failed to extract video information")
 
-            duration = info.get("duration", 0)
+            # Log summary of extracted metadata
+            info_summary = {
+                "title": info.get("title"),
+                "uploader": info.get("uploader"),
+                "duration": info.get("duration"),
+                "view_count": info.get("view_count"),
+                "upload_date": info.get("upload_date"),
+            }
+            self.logger.info(f"Extracted video metadata: {info_summary}")
+
+            duration = info.get("duration") or 0
             audio_path = None
 
             # Check duration limit
@@ -105,16 +126,16 @@ class YtDlpExtractor(VideoExtractor, LoggerMixin):
 
             return ExtractionData(
                 url=url,
-                title=info.get("title", "Unknown Title"),
-                description=info.get("description", ""),
-                author=info.get("uploader", "Unknown Author"),
+                title=info.get("title") or "Unknown Title",
+                description=info.get("description") or "",
+                author=info.get("uploader") or "Unknown Author",
                 duration=duration,
-                published_at=self._parse_upload_date(info.get("upload_date")),
+                published_at=self._parse_upload_date(info.get("upload_date") or ""),
                 metadata={
-                    "platform": info.get("extractor", "unknown"),
-                    "view_count": info.get("view_count", 0),
-                    "like_count": info.get("like_count", 0),
-                    "video_id": info.get("id", ""),
+                    "platform": info.get("extractor") or "unknown",
+                    "view_count": info.get("view_count") or 0,
+                    "like_count": info.get("like_count") or 0,
+                    "video_id": info.get("id") or "",
                 },
                 audio_path=audio_path,
             )
@@ -126,7 +147,7 @@ class YtDlpExtractor(VideoExtractor, LoggerMixin):
     async def _download_audio(self, url: str, info: Dict[str, Any]) -> Optional[tuple[Path, str]]:
         """Download audio from video and return path and video ID."""
         try:
-            video_id = info.get("id", hashlib.md5(url.encode()).hexdigest()[:8])
+            video_id = info.get("id") or hashlib.md5(url.encode()).hexdigest()[:8]
             audio_path = self.temp_dir / f"{video_id}.mp3"
 
             # Skip if already cached/exists in temp
@@ -136,7 +157,6 @@ class YtDlpExtractor(VideoExtractor, LoggerMixin):
 
             opts = self.yt_dlp_opts.copy()
             opts["outtmpl"] = str(self.temp_dir / f"{video_id}.%(ext)s")
-            # Add proper postprocessors for audio extraction
             opts["postprocessors"] = [
                 {
                     "key": "FFmpegExtractAudio",
@@ -146,10 +166,10 @@ class YtDlpExtractor(VideoExtractor, LoggerMixin):
             ]
 
             try:
-                self.logger.info(f"Starting download for URL: {url}")
+                self.logger.info(f"Downloading audio from video content")
                 with yt_dlp.YoutubeDL(opts) as ydl:
                     ydl.download([url])
-                self.logger.info(f"Download completed for URL: {url}")
+                self.logger.info(f"Download completed for video content")
             except Exception as e:
                 self.logger.error(f"Download failed: {e}", exc_info=True)
                 raise

@@ -227,6 +227,10 @@ class Settings(BaseSettings):
         default=False, description="Enable verbose logging for video processing"
     )
 
+    cookies_file_path: str | None = Field(
+        default=None, description="Path to cookies.txt file for yt-dlp authentication"
+    )
+
     # Caching Configuration
     cache_ttl: int = Field(default=3600, description="Cache time-to-live in seconds", ge=0)
 

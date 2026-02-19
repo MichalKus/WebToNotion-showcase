@@ -6,17 +6,14 @@ and Playwright as a fallback mechanism.
 """
 
 import json
-from venv import logger
 
 from pydantic import HttpUrl
 
 from webtonotion.config.logging import LoggerMixin
-from webtonotion.config.settings import settings
 from webtonotion.exceptions import VideoScrapingError
 from webtonotion.models.video import VideoContent
 from webtonotion.services.analysis.content_analyzer import ContentAnalyzer
 from webtonotion.services.analysis.transcriber import AudioTranscriber
-from webtonotion.services.extraction.playwright_extractor import PlaywrightExtractor
 from webtonotion.services.extraction.ytdlp_extractor import YtDlpExtractor
 from webtonotion.services.storage.file_cache import FileCacheService
 
@@ -38,6 +35,7 @@ class VideoScrapingService(LoggerMixin):
         "dailymotion.com",
         "twitch.tv",
         "facebook.com/watch",
+        "facebook.com/share",
         "instagram.com/reel",
         "tiktok.com",
         "twitter.com",
@@ -49,13 +47,8 @@ class VideoScrapingService(LoggerMixin):
         # Initialize clients and sub-services
         self.file_cache = FileCacheService()
         self.ytdlp_extractor = YtDlpExtractor()
-        self.playwright_extractor = PlaywrightExtractor()
         self.transcriber = AudioTranscriber()
         self.analyzer = ContentAnalyzer()
-
-        self.logger.info(
-            "VideoScrapingService initialized successfully with modern PydanticAI structured outputs"
-        )
 
     async def is_video_url(self, url: HttpUrl) -> bool:
         """Check if the provided URL is from a supported video platform.
@@ -106,21 +99,13 @@ class VideoScrapingService(LoggerMixin):
                 self.logger.info(f"Successfully extracted content with yt-dlp for URL: {url_str}")
             except Exception as e:
                 self.logger.warning(f"yt-dlp extraction failed for {url_str}: {e}")
-                # Fallback logic (currently disabled as in original code)
-                # self.logger.info(f"Falling back to Playwright extraction for URL: {url_str}")
-                # extraction_data = await self.playwright_extractor.extract(url_str)
-                # self.logger.info(f"Successfully extracted content with Playwright for URL: {url_str}")
-
-                # If fallback is not enabled, re-raise the exception
-                if not extraction_data:
-                    raise
+                raise
 
             # Transcribe audio if available
             transcript = ""
             if extraction_data.audio_path and extraction_data.audio_path.exists():
                 try:
                     transcript = await self.transcriber.transcribe(extraction_data.audio_path)
-                    self.logger.info(f"Successfully transcribed audio: {transcript}")
 
                     # Save transcription to temp file (replicating original behavior)
                     video_id = extraction_data.metadata.get("video_id")
@@ -129,7 +114,6 @@ class VideoScrapingService(LoggerMixin):
                         transcript_file.write_text(transcript, encoding="utf-8")
                         self.logger.debug(f"Saved transcription to {transcript_file}")
 
-                    self.logger.info(f"Successfully transcribed audio for: {url_str}")
                 except Exception as e:
                     self.logger.warning(f"Transcription failed for {url_str}: {e}")
                     # Audio path cleanup is handled by transcriber on error
@@ -156,9 +140,7 @@ class VideoScrapingService(LoggerMixin):
                 locations=analyzed_content.locations,
                 metadata={
                     **extraction_data.metadata,
-                    "key_insights": json.dumps(
-                        analyzed_content.key_insights
-                    ),  # Convert list to JSON string
+                    "key_insights": json.dumps(analyzed_content.key_insights),
                     "content_category": analyzed_content.content_category,
                     # Add skipped_transcription if applicable
                     **(

@@ -67,10 +67,6 @@ def create_app() -> FastAPI:
     app.add_middleware(ErrorHandlingMiddleware)
     app.add_middleware(RequestLoggingMiddleware)
 
-    # Enforce HTTPS in production
-    if settings.environment == "production":
-        app.add_middleware(HTTPSRedirectMiddleware)
-
     app.add_middleware(
         TrustedHostMiddleware,
         allowed_hosts=settings.allowed_hosts,
@@ -107,6 +103,6 @@ if __name__ == "__main__":
         port=settings.port,
         log_level=settings.log_level.lower(),
         reload=settings.debug,
-        proxy_headers=True,  # Enable proxy headers support
-        forwarded_allow_ips=settings.forwarded_allow_ips,  # Trust proxies
+        proxy_headers=True,
+        forwarded_allow_ips=settings.forwarded_allow_ips,
     )

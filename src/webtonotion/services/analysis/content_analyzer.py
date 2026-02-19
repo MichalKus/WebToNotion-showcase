@@ -19,7 +19,7 @@ class ContentAnalyzer(LoggerMixin):
         if not settings.openrouter_api_key:
             raise ValueError("OpenRouter API key is required for content analysis")
 
-        self.logger.info(
+        self.logger.debug(
             f"Initializing ContentAnalyzer with OpenRouter using model: {settings.openrouter_model}"
         )
 
@@ -80,6 +80,9 @@ class ContentAnalyzer(LoggerMixin):
                 Provide a comprehensive analysis with structured output.
             """
 
+            # it was:
+            # analysis_agent = self.analysis_agent
+            # result = await analysis_agent.run(analysis_prompt)
             result = await self.analysis_agent.run(analysis_prompt)
 
             self.logger.info(f"Analysis result: {result.output}")

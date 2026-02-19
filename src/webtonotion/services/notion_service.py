@@ -4,7 +4,6 @@ This module provides comprehensive integration with the Notion API, including
 database management, page creation, and error handling with rate limiting.
 """
 
-import json
 import logging
 from datetime import datetime
 from typing import Any, Dict, List, Optional
@@ -25,7 +24,6 @@ from webtonotion.exceptions import (
 from webtonotion.models.notion import NotionDatabase, NotionPage, NotionPageResponse
 from webtonotion.models.video import VideoContent
 from webtonotion.services.analysis.notion_mapper import MapperDependencies, notion_mapper_agent
-from webtonotion.utils import clean_json
 from webtonotion.utils.rate_limiter import RateLimiter
 
 logger = logging.getLogger(__name__)
@@ -50,7 +48,6 @@ class NotionService:
         """
         self.settings = settings
         self.api_key = api_key or settings.notion_api_key
-        logger.info(f"Initializing Notion service with API key: {self.api_key}")
 
         if not self.api_key:
             raise NotionAuthenticationError(
@@ -64,8 +61,6 @@ class NotionService:
 
         # Rate limiter: Notion allows 3 requests per second
         self.rate_limiter = RateLimiter(max_requests=3, time_window=1)
-
-        logger.info("Notion service initialized successfully")
 
     async def _handle_api_error(self, error: Exception) -> None:
         """Handle and convert Notion API errors to service-specific exceptions.
@@ -244,9 +239,9 @@ class NotionService:
             if db_schema is None:
                 db_schema = await self.get_database_properties(database_id)
 
-            deps = MapperDependencies()
-            deps.schema = db_schema
-            deps.database_id = database_id
+            logger.info(f"Schema properties: {db_schema}")
+
+            deps = MapperDependencies(schema=db_schema, database_id=database_id)
 
             logger.info(f"Invoking NotionMapperAgent for database {database_id}")
 
@@ -267,31 +262,22 @@ class NotionService:
             Please analyze this video content and create a Notion page payload that maps all relevant information to the provided database schema."""
 
             result = await notion_mapper_agent.run(prompt, deps=deps)
-            agent_response = result.output
-            logger.debug(f"Agent response: {agent_response}")
+            page_payload = result.output
+            logger.debug(f"Agent payload: {page_payload}")
 
-            try:
-                cleaned_response = clean_json(agent_response)
-                page_data = json.loads(cleaned_response)
-                logger.info(f"Page data: {page_data}")
+            # Extract properties and children from the payload
+            # Filter out empty property values (e.g. properties that serialized to {})
+            # This is crucial because Pydantic's exclude_none=True can leave empty dicts
+            # for optional fields like 'select', 'date', etc., which Notion rejects.
+            properties = {
+                k: v for k, v in page_payload.properties.items() if v  # Keep only non-empty values
+            }
 
-            except json.JSONDecodeError as e:
-                raise ValueError(f"Agent returned invalid JSON: {e}")
-
-            # # Filter out empty property values (e.g. properties that serialized to {})
-            # # This is crucial because Pydantic's exclude_none=True can leave empty dicts
-            # # for optional fields like 'select', 'date', etc., which Notion rejects.
-            if "properties" in page_data:
-                page_data["properties"] = {
-                    k: v
-                    for k, v in page_data["properties"].items()
-                    if v  # Keep only non-empty values
-                }
-
+            logger.info(f"Successfully parsed page data for notion page creation")
             return await self.create_page(
                 database_id=database_id,
-                properties=page_data["properties"],
-                children=page_data.get("children"),
+                properties=properties,
+                children=page_payload.children,
             )
 
         except Exception as e:
