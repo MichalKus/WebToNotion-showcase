@@ -5,9 +5,46 @@ including database and page representations.
 """
 
 from datetime import datetime
-from typing import Any, Dict
+from typing import Any, Dict, List
 
 from pydantic import BaseModel, ConfigDict, Field
+
+
+class NotionPagePayload(BaseModel):
+    """Structured output for Notion page creation.
+
+    This model defines the payload structure required by the Notion API to create
+    a new page in a database, including parent reference, properties, and content blocks.
+    """
+
+    parent: Dict[str, str] = Field(
+        ..., description="Parent reference - MUST be {'database_id': '<database_id>'}"
+    )
+    properties: Dict[str, Any] = Field(
+        ...,
+        description=(
+            "Property values matching schema exactly. "
+            "Key names must match schema property names (case-sensitive). "
+            "Common types: "
+            "- title: {'title': [{'text': {'content': 'text'}}]} "
+            "- rich_text: {'rich_text': [{'text': {'content': 'text'}}]} "
+            "- select: {'select': {'name': 'option_name'}} "
+            "- multi_select: {'multi_select': [{'name': 'option1'}]} "
+            "- date: {'date': {'start': 'YYYY-MM-DD'}} "
+            "- number: {'number': 123} "
+            "- url: {'url': 'https://...'}"
+        ),
+    )
+    children: List[Dict[str, Any]] = Field(
+        default_factory=list,
+        description=(
+            "Page content blocks. Valid block types: "
+            "heading_1, heading_2, heading_3, paragraph, "
+            "bulleted_list_item (NOT bulleted_list), "
+            "numbered_list_item (NOT numbered_list). "
+            "Each block: {'object': 'block', 'type': '<type>', '<type>': {'rich_text': [...]}}"
+        ),
+    )
 
 
 class NotionDatabase(BaseModel):

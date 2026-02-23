@@ -18,6 +18,7 @@ from webtonotion.exceptions import (
     NotionAuthenticationError,
     NotionRateLimitError,
 )
+from webtonotion.models.notion import NotionPagePayload
 from webtonotion.models.video import VideoContent
 from webtonotion.services.notion_service import (
     NotionService,
@@ -209,19 +210,17 @@ class TestNotionService:
         db_schema = {"Name": {"type": "title"}, "URL": {"type": "url"}}
 
         # Mock agent response
-        agent_output_json = json.dumps(
-            {
-                "parent": {"database_id": database_id},
-                "properties": {
-                    "Name": {"title": [{"text": {"content": "Test Video"}}]},
-                    "URL": {"url": "https://example.com"},
-                },
-                "children": [],
-            }
+        agent_payload = NotionPagePayload(
+            parent={"database_id": database_id},
+            properties={
+                "Name": {"title": [{"text": {"content": "Test Video"}}]},
+                "URL": {"url": "https://example.com"},
+            },
+            children=[],
         )
 
         mock_agent_result = Mock()
-        mock_agent_result.output = agent_output_json
+        mock_agent_result.output = agent_payload
 
         # Mock create_page response
         mock_page_response = Mock()
@@ -259,22 +258,18 @@ class TestNotionService:
             assert "Name" in call_args[1]["properties"]
 
     @pytest.mark.asyncio
-    async def test_create_video_page_agent_invalid_json(self):
-        """Test video page creation when agent returns invalid JSON."""
+    async def test_create_video_page_agent_failure(self):
+        """Test video page creation when agent fails."""
         service = create_test_service()
 
         video_content = VideoContent(
             url="https://example.com", title="Test", author="Test", duration=0, transcript=""
         )
 
-        # Mock agent returning invalid JSON
-        mock_agent_result = Mock()
-        mock_agent_result.output = "Invalid JSON"
-
         with (
             patch(
                 "webtonotion.services.notion_service.notion_mapper_agent.run",
-                new_callable=AsyncMock,
+                side_effect=Exception("Agent error"),
             ) as mock_agent_run,
             patch.object(
                 service, "get_database_properties", new_callable=AsyncMock
@@ -282,8 +277,7 @@ class TestNotionService:
         ):
 
             mock_get_props.return_value = {}
-            mock_agent_run.return_value = mock_agent_result
 
-            # Should raise NotionAPIError (wrapping the ValueError from JSON parsing)
-            with pytest.raises(NotionAPIError):
+            # Should raise NotionAPIError
+            with pytest.raises(NotionAPIError, match="Unexpected Notion API error: Agent error"):
                 await service.create_video_page("db_id", video_content)

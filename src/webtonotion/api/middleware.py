@@ -37,7 +37,7 @@ class ErrorHandlingMiddleware(BaseHTTPMiddleware):
 
         try:
             # Log incoming request
-            logger.info(
+            logger.debug(
                 "Request started",
                 extra={
                     "request_id": request_id,
@@ -58,7 +58,7 @@ class ErrorHandlingMiddleware(BaseHTTPMiddleware):
             response.headers["X-Process-Time"] = str(process_time)
 
             # Log successful response
-            logger.info(
+            logger.debug(
                 "Request completed",
                 extra={
                     "request_id": request_id,
@@ -66,16 +66,6 @@ class ErrorHandlingMiddleware(BaseHTTPMiddleware):
                     "process_time": process_time,
                 },
             )
-
-            # Log to Logfire if available
-            with logfire.span(
-                "http_request",
-                method=request.method,
-                url=str(request.url),
-                status_code=response.status_code,
-                process_time=process_time,
-            ):
-                pass
 
             return response
 

@@ -16,7 +16,7 @@ from notion_client.errors import APIResponseError
 
 from webtonotion.config.settings import Settings
 from webtonotion.exceptions import NotionAPIError, NotionAuthenticationError
-from webtonotion.models.notion import NotionDatabase
+from webtonotion.models.notion import NotionDatabase, NotionPagePayload
 from webtonotion.models.video import VideoContent
 from webtonotion.services.notion_service import NotionService
 
@@ -122,12 +122,12 @@ class TestNotionServiceIntegration:
                 )
 
             # 3. Create a valid payload using the real title property name
-            mock_payload = {
-                "parent": {"database_id": test_db.id},
-                "properties": {
+            mock_payload = NotionPagePayload(
+                parent={"database_id": test_db.id},
+                properties={
                     title_prop: {"title": [{"text": {"content": "Integration Test Video"}}]}
                 },
-                "children": [
+                children=[
                     {
                         "object": "block",
                         "type": "paragraph",
@@ -141,10 +141,10 @@ class TestNotionServiceIntegration:
                         },
                     }
                 ],
-            }
+            )
 
             mock_agent_result = AsyncMock()
-            mock_agent_result.output = json.dumps(mock_payload)
+            mock_agent_result.output = mock_payload
 
             video_content = VideoContent(
                 url="https://example.com",

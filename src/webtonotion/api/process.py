@@ -7,6 +7,7 @@ with comprehensive error handling and validation.
 import logging
 from typing import Annotated, Any, Dict
 
+import logfire
 from fastapi import APIRouter, Depends, HTTPException, status
 
 from webtonotion.dependencies import get_notion_service, get_video_scraping_service
@@ -59,33 +60,32 @@ async def process_url(
     logger.info(f"Processing URL request: {request.url}")
 
     try:
-        db_schema = await _validate_request_and_get_db_schema(
-            request=request,
-            notion_service=notion_service,
-            video_service=video_service,
-        )
+        with logfire.span("Request validation"):
+            # Validate request and get database schema
+            db_schema = await _validate_request_and_get_db_schema(
+                request=request,
+                notion_service=notion_service,
+                video_service=video_service,
+            )
 
-        logger.info(f"Confirmed video URL: {request.url}")
+        with logfire.span("Video content extraction"):
+            # Process video content
+            video_content = await video_service.process_video(request.url)
+            logger.info(
+                f"Video content extracted successfully: title='{video_content.title}', "
+                f"duration='{video_content.duration}', author='{video_content.author}', "
+                f"topics={video_content.topics}, sentiment='{video_content.sentiment}'"
+            )
 
-        # Process video content
-        logger.info("Starting video content extraction...")
-        video_content = await video_service.process_video(request.url)
+        with logfire.span("Notion page creation"):
+            # Create Notion page with video content
+            page_response = await notion_service.create_video_page(
+                database_id=request.database_id,
+                video_content=video_content,
+                db_schema=db_schema,
+            )
 
-        logger.info(
-            f"Video content extracted successfully: title='{video_content.title}', "
-            f"duration='{video_content.duration}', author='{video_content.author}', "
-            f"topics={video_content.topics}, sentiment='{video_content.sentiment}'"
-        )
-
-        # Create Notion page with video content
-        logger.info(f"Creating Notion page in database: {request.database_id}")
-        page_response = await notion_service.create_video_page(
-            database_id=request.database_id,
-            video_content=video_content,
-            db_schema=db_schema,
-        )
-        logger.info(f"Notion page created successfully: {page_response.id}")
-
+        logger.info("Request processed successfully")
         # Return comprehensive success response
         return _build_success_response(page_response=page_response, video_content=video_content)
 
@@ -216,7 +216,7 @@ async def _validate_request_and_get_db_schema(
             detail="Database ID is required to create a Notion page",
         )
 
-    logger.info(f"Validating database access and fetching schema for ID: {request.database_id}")
+    logger.info(f"Validating notion access")
     db_schema = await notion_service.get_database_properties(request.database_id)
 
     logger.info(f"Checking if URL is a video URL: {request.url}")

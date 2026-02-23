@@ -1,0 +1,39 @@
+services:
+  n8n:
+    image: n8nio/n8n:latest
+    container_name: n8n
+    networks:
+      - app-network
+    ports:
+      - "20140:5678"
+    restart: unless-stopped
+    volumes:
+      - n8n_data:/home/node/.n8n
+  
+  webtonotion:
+    image: mikus67/webtonotion:latest
+    container_name: webtonotion
+    networks:
+      - app-network
+    env_file:
+      - .env
+    volumes:
+      - webtonotion_cache:/app/cache
+      - ./cookies.txt:/app/cookies.txt:ro
+    ports:
+      - "8000:8000"
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/api/v1/health/"]
+      interval: 24h
+      timeout: 20s
+      retries: 3
+      start_period: 20s
+
+networks:
+  app-network:
+    driver: bridge
+
+volumes:
+  webtonotion_cache:
+  n8n_data:

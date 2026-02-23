@@ -35,16 +35,9 @@ class AudioTranscriber(LoggerMixin):
                 self.logger.info(
                     f"Transcribing audio: {audio_path} with Groq Whisper model: {settings.whisper_model}"
                 )
-                logfire.info(
-                    "Starting audio transcription",
-                    audio_path=str(audio_path),
-                    audio_size=audio_path.stat().st_size if audio_path.exists() else 0,
-                    model=settings.whisper_model,
-                )
 
                 start_time = time.time()
 
-                # Open and send the audio file directly to Groq Whisper API
                 with logfire.span("groq_api.transcription_request") as api_span:
                     api_span.set_attribute("audio.filename", audio_path.name)
                     api_span.set_attribute("audio.format", "audio/mpeg")
@@ -64,12 +57,11 @@ class AudioTranscriber(LoggerMixin):
                     )
 
                 processing_time = time.time() - start_time
-
-                self.logger.info(f"Transcription completed in {processing_time:.2f}s")
                 logfire.info(
                     "Audio transcription completed successfully",
                     processing_time=processing_time,
                     transcript_length=len(response.strip()) if response else 0,
+                    transcript_content=response.strip(),
                     audio_path=str(audio_path),
                 )
 

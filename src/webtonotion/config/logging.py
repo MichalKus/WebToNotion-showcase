@@ -52,7 +52,9 @@ def get_logging_config() -> Dict[str, Any]:
         )
     else:
         formatter_class = "webtonotion.config.logging.StructuredFormatter"
-        formatter_format = "%(asctime)s %(name)s %(levelname)s %(filename)s %(lineno)d %(message)s"
+        formatter_format = (
+            "%(asctime)s - %(name)s - %(levelname)s - [%(filename)s:%(lineno)d] - %(message)s"
+        )
 
     config = {
         "version": 1,
@@ -78,8 +80,8 @@ def get_logging_config() -> Dict[str, Any]:
         "loggers": {
             "webtonotion": {
                 "level": settings.log_level,
-                "handlers": ["console"],
-                "propagate": False,
+                "handlers": [],
+                "propagate": True,  # Allow logs to propagate to root logger for Logfire
             },
             "uvicorn": {
                 "level": "INFO",
@@ -116,35 +118,36 @@ def setup_logging(app) -> None:
             logfire.configure(
                 send_to_logfire="if-token-present",
                 token=settings.logfire_token,
-                service_name=settings.logfire_project_name,  # Use service_name instead
+                service_name=settings.logfire_project_name,
                 environment=settings.environment,
             )
 
             # Instrument FastAPI
-            logfire.instrument_fastapi(app)
-            logfire.instrument_httpx()
-            logfire.info("Configuring logfire for Pydantic AI instrumentation")
-            logfire.instrument_pydantic_ai()
+            with logfire.span("Application preparation"):
+                logfire.instrument_fastapi(app)
+                logfire.info("Configuring logfire for Pydantic AI instrumentation")
+                logfire.instrument_pydantic_ai()
 
-            # Log successful Logfire setup
-            logger = logging.getLogger(__name__)
-            logger.info("Logfire monitoring configured successfully")
+                # Log successful Logfire setup
+                handler = logfire.LogfireLoggingHandler()
+                handler.setLevel(settings.log_level.upper())
+                logging.getLogger().addHandler(handler)
+
+                logger = logging.getLogger(__name__)
+                logger.setLevel(settings.log_level.upper())
+                logger.info(
+                    "Logging configured",
+                    extra={
+                        "log_level": settings.log_level,
+                        "environment": settings.environment,
+                        "logfire_enabled": bool(settings.logfire_token),
+                    },
+                )
 
         except Exception as e:
             # Log error but don't fail application startup
             logger = logging.getLogger(__name__)
             logger.error(f"Failed to configure Logfire: {e}")
-
-    # Log application startup
-    logger = logging.getLogger(__name__)
-    logger.info(
-        "Logging configured",
-        extra={
-            "log_level": settings.log_level,
-            "environment": settings.environment,
-            "logfire_enabled": bool(settings.logfire_token),
-        },
-    )
 
 
 def get_logger(name: str) -> logging.Logger:
