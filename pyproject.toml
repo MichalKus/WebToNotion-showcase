@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "webtonotion"
-version = "0.1.0"
+version = "0.2.0"
 description = "A FastAPI application to process URLs and create Notion pages using AI agents"
 authors = [
     {name = "Michal Kus", email = "michal@example.com"}
@@ -34,12 +34,13 @@ dependencies = [
     "pydantic-ai>=1.27.0",
     "httpx>=0.28.1",
     "python-json-logger>=4.0.0",
-    "yt-dlp>=2025.10.22",
-    "yt-dlp-ejs>=0.3.2",
+    "yt-dlp>=2026.7.4",
+    "yt-dlp-ejs>=0.8.0",
     "openai>=1.109.1",
     "pydub>=0.25.1",
     "ffmpeg-python>=0.2.0",
-    "gunicorn>=22.0.0"
+    "gunicorn>=22.0.0",
+    "groq>=0.32.0"
 ]
 
 [project.optional-dependencies]

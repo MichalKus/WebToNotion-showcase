@@ -15,6 +15,7 @@ from fastapi.middleware.trustedhost import TrustedHostMiddleware
 
 from webtonotion.api.health import router as health_router
 from webtonotion.api.middleware import (
+    ContentLengthMiddleware,
     ErrorHandlingMiddleware,
     RequestLoggingMiddleware,
     SecurityHeadersMiddleware,
@@ -65,6 +66,7 @@ def create_app() -> FastAPI:
     # Add middleware (order matters - first added is outermost)
     app.add_middleware(SecurityHeadersMiddleware)
     app.add_middleware(ErrorHandlingMiddleware)
+    app.add_middleware(ContentLengthMiddleware)
     app.add_middleware(RequestLoggingMiddleware)
 
     app.add_middleware(

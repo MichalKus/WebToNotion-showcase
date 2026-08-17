@@ -213,13 +213,6 @@ def skip_if_no_internet():
 
 
 @pytest.fixture
-def skip_if_no_api_keys():
-    """Skip test if required API keys are not available."""
-    if not os.getenv("OPENAI_API_KEY"):
-        pytest.skip("Test requires OPENAI_API_KEY environment variable")
-
-
-@pytest.fixture
 def mock_ytdlp():
     """Provide a mock yt-dlp YoutubeDL instance."""
     mock_ytdl = Mock()

@@ -10,7 +10,7 @@ import uuid
 from typing import Callable
 
 import logfire
-from fastapi import HTTPException, Request, Response
+from fastapi import HTTPException, Request, Response, status
 from fastapi.responses import JSONResponse
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.types import ASGIApp
@@ -135,6 +135,39 @@ class ErrorHandlingMiddleware(BaseHTTPMiddleware):
             )
 
             return response
+
+
+class ContentLengthMiddleware(BaseHTTPMiddleware):
+    """Middleware to enforce maximum request content length."""
+
+    async def dispatch(self, request: Request, call_next: Callable) -> Response:
+        """Check request content length against configured maximum."""
+        content_length = request.headers.get("content-length")
+        if content_length:
+            try:
+                length = int(content_length)
+                if length > settings.max_content_length:
+                    logger.warning(
+                        "Request entity too large",
+                        extra={
+                            "content_length": length,
+                            "max_content_length": settings.max_content_length,
+                            "url": str(request.url),
+                        },
+                    )
+                    return JSONResponse(
+                        status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+                        content={
+                            "status": "error",
+                            "message": f"Request entity too large. Maximum allowed is {settings.max_content_length} bytes.",
+                            "max_allowed_bytes": settings.max_content_length,
+                        },
+                    )
+            except (ValueError, TypeError):
+                # If content-length header is invalid, let the next handler decide
+                pass
+
+        return await call_next(request)
 
 
 class RequestLoggingMiddleware(BaseHTTPMiddleware):

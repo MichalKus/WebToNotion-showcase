@@ -15,7 +15,7 @@ worker_class = "uvicorn.workers.UvicornWorker"
 # Number of Workers:
 # Set to 1. On a 1GB RAM server, running more than one worker is risky
 # and can easily lead to memory exhaustion, especially with a heavy app.
-workers = int(os.getenv("WEB_CONCURRENCY", 1))
+workers = int(os.getenv("WORKERS", os.getenv("WEB_CONCURRENCY", 1)))
 #
 # Number of Threads:
 # Use threads to handle multiple concurrent requests within the single worker.

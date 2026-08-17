@@ -1,18 +1,7 @@
 services:
-  n8n:
-    image: n8nio/n8n:latest
-    container_name: n8n
-    networks:
-      - app-network
-    ports:
-      - "20140:5678"
-    restart: unless-stopped
-    volumes:
-      - n8n_data:/home/node/.n8n
-  
   webtonotion:
-    image: mikus67/webtonotion:latest
-    container_name: webtonotion
+    image: ${WEBTONOTION_IMAGE:-mikus67/webtonotion:prod}
+    container_name: ${COMPOSE_PROJECT_NAME:-webtonotion-prod}
     networks:
       - app-network
     env_file:
@@ -21,19 +10,31 @@ services:
       - webtonotion_cache:/app/cache
       - ./cookies.txt:/app/cookies.txt:ro
     ports:
-      - "8000:8000"
+      - "${PORT:-8000}:8000"
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8000/api/v1/health/"]
-      interval: 24h
-      timeout: 20s
+      interval: 30s
+      timeout: 10s
       retries: 3
       start_period: 20s
+    # 2GB VPS: cap the container so a Whisper/ffmpeg spike cannot take the host
+    # down, and rotate logs so json-file cannot fill the disk.
+    # Leaves ~512MB headroom for the host OS, reverse proxy, and Docker daemon.
+    mem_limit: 1536m
+    memswap_limit: 1536m
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
 
 networks:
   app-network:
-    driver: bridge
+    name: app-network
+    external: true
 
 volumes:
   webtonotion_cache:
-  n8n_data:
+    external: true
+    name: ${CACHE_VOLUME_NAME:-webtonotion_webtonotion_cache}

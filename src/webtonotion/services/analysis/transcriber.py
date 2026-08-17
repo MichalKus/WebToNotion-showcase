@@ -16,7 +16,9 @@ class AudioTranscriber(LoggerMixin):
 
     def __init__(self) -> None:
         """Initialize the transcription service with direct Groq client."""
-        self.groq_client = groq.AsyncGroq(api_key=settings.whisper_api_key)
+        self.groq_client = groq.AsyncGroq(
+            api_key=settings.whisper_api_key, max_retries=settings.max_retries
+        )
         self.cleanup_temp_files = settings.cleanup_temp_files
         self.temp_dir = Path(settings.temp_dir)
 

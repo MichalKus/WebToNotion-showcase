@@ -9,21 +9,15 @@ import json
 from datetime import datetime
 from unittest.mock import AsyncMock, Mock, patch
 
+import httpx
 import pytest
 from notion_client.errors import APIResponseError
 
 from webtonotion.config.settings import Settings
-from webtonotion.exceptions import (
-    NotionAPIError,
-    NotionAuthenticationError,
-    NotionRateLimitError,
-)
+from webtonotion.exceptions import NotionAPIError, NotionAuthenticationError, NotionRateLimitError
 from webtonotion.models.notion import NotionPagePayload
 from webtonotion.models.video import VideoContent
-from webtonotion.services.notion_service import (
-    NotionService,
-    RateLimiter,
-)
+from webtonotion.services.notion_service import NotionService, RateLimiter
 
 
 @pytest.fixture
@@ -45,6 +39,7 @@ def create_test_service():
     mock_settings.notion_version = "2025-09-03"
     mock_settings.openrouter_api_key = "test_openrouter_key"
     mock_settings.openrouter_model = "test_model"
+    mock_settings.request_timeout = 300
     return NotionService(mock_settings)
 
 
@@ -56,6 +51,7 @@ class TestNotionService:
         mock_settings = Mock()
         mock_settings.notion_api_key = "test_api_key"
         mock_settings.notion_version = "2025-09-03"
+        mock_settings.request_timeout = 300
 
         service = NotionService(mock_settings)
 
@@ -105,13 +101,12 @@ class TestNotionService:
         service = create_test_service()
 
         with patch.object(service.client, "search") as mock_search:
-            mock_response = Mock()
-            mock_response.status_code = 400
-            mock_response.headers = {}
             mock_error = APIResponseError(
-                response=mock_response,
-                message="Invalid request",
                 code="validation_error",
+                status=400,
+                message="Invalid request",
+                headers=httpx.Headers({}),
+                raw_body_text="",
             )
             mock_search.side_effect = mock_error
 
@@ -124,13 +119,12 @@ class TestNotionService:
         service = create_test_service()
 
         with patch.object(service.client, "search") as mock_search:
-            mock_response = Mock()
-            mock_response.status_code = 429
-            mock_response.headers = {}
             mock_error = APIResponseError(
-                response=mock_response,
-                message="Rate limit exceeded",
                 code="rate_limited",
+                status=429,
+                message="Rate limit exceeded",
+                headers=httpx.Headers({}),
+                raw_body_text="",
             )
             mock_search.side_effect = mock_error
 

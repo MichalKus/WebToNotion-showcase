@@ -9,18 +9,10 @@ from datetime import datetime
 from typing import Any, Dict, List, Optional
 
 from notion_client import Client
-from notion_client.errors import (
-    APIResponseError,
-    HTTPResponseError,
-    RequestTimeoutError,
-)
+from notion_client.errors import APIResponseError, HTTPResponseError, RequestTimeoutError
 
 from webtonotion.config.settings import Settings
-from webtonotion.exceptions import (
-    NotionAPIError,
-    NotionAuthenticationError,
-    NotionRateLimitError,
-)
+from webtonotion.exceptions import NotionAPIError, NotionAuthenticationError, NotionRateLimitError
 from webtonotion.models.notion import NotionDatabase, NotionPage, NotionPageResponse
 from webtonotion.models.video import VideoContent
 from webtonotion.services.analysis.notion_mapper import MapperDependencies, notion_mapper_agent
@@ -57,6 +49,7 @@ class NotionService:
         self.client = Client(
             auth=self.api_key,
             notion_version=settings.notion_version,
+            timeout_ms=settings.request_timeout * 1000,
         )
 
         # Rate limiter: Notion allows 3 requests per second
@@ -239,7 +232,7 @@ class NotionService:
             if db_schema is None:
                 db_schema = await self.get_database_properties(database_id)
 
-            logger.info(f"Schema properties: {db_schema}")
+            logger.info(f"Schema properties: {list(db_schema.keys())}")
 
             deps = MapperDependencies(schema=db_schema, database_id=database_id)
 

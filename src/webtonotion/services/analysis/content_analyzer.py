@@ -30,20 +30,23 @@ class ContentAnalyzer(LoggerMixin):
         )
 
         self.analysis_agent = Agent(
-            model=model, output_type=ContentAnalysisResult, system_prompt=self._get_system_prompt()
+            model=model,
+            output_type=ContentAnalysisResult,
+            retries=settings.max_retries,
+            system_prompt=self._get_system_prompt(),
         )
 
     def _get_system_prompt(self) -> str:
         """Get the system prompt for content analysis."""
         return """You are an expert content analyst specializing in video content analysis.
-        
+
         Your task is to analyze video content and extract structured information including:
         1. Main topics and themes (maximum 10 most relevant topics)
         2. Overall sentiment (positive, negative, or neutral)
         3. Geographic locations mentioned in the content
         4. Key insights and takeaways (maximum 5 most important)
         5. Primary content category
-        
+
         Base your analysis on the provided title, description, and transcript.
         Be precise and focus on the most relevant and significant elements.
         For sentiment, consider the overall tone and message of the content.
@@ -67,16 +70,16 @@ class ContentAnalyzer(LoggerMixin):
             # Create comprehensive analysis prompt
             analysis_prompt = f"""
                 Analyze the following video content:
-            
+
                 Title: {content_data['title']}
                 Platform: {content_data.get('platform', 'unknown')}
-            
+
                 Description:
                 {content_data['description'][:1000]}{'...' if len(content_data['description']) > 1000 else ''}
-            
+
                 Transcript:
                 {transcript[:2000]}{'...' if len(transcript) > 2000 else ''}
-            
+
                 Provide a comprehensive analysis with structured output.
             """
 
