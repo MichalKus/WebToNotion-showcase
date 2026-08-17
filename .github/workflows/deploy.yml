@@ -1,0 +1,250 @@
+name: Deploy to VPS
+
+# Production is a push to master (i.e. a merged PR). Everything else -- an open
+# PR, or a manual dispatch from any branch -- previews on the shared dev VPS.
+on:
+  workflow_dispatch:
+  pull_request:
+    branches: [master]
+    types: [opened, synchronize, reopened]
+  push:
+    branches: [master]
+
+# Keyed to the target environment, not the ref: two different feature branches
+# are different refs but share one dev VPS directory, port and container
+# (review #9). Dev runs cancel each other; prod runs queue.
+concurrency:
+  group: deploy-${{ (github.event_name == 'push' && github.ref == 'refs/heads/master') && 'prod' || 'dev' }}
+  cancel-in-progress: ${{ !(github.event_name == 'push' && github.ref == 'refs/heads/master') }}
+
+permissions:
+  contents: read
+
+jobs:
+  setup:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      is_prod: ${{ steps.resolve.outputs.is_prod }}
+      environment: ${{ steps.resolve.outputs.environment }}
+      deploy_path: ${{ steps.resolve.outputs.deploy_path }}
+      port: ${{ steps.resolve.outputs.port }}
+      compose_project: ${{ steps.resolve.outputs.compose_project }}
+      cache_volume: ${{ steps.resolve.outputs.cache_volume }}
+      gh_environment: ${{ steps.resolve.outputs.gh_environment }}
+    steps:
+      - name: Resolve target environment
+        id: resolve
+        run: |
+          if [[ "${{ github.event_name }}" == "push" && "${{ github.ref }}" == "refs/heads/master" ]]; then
+            {
+              echo "is_prod=true"
+              echo "environment=production"
+              echo "gh_environment=production"
+              echo "deploy_path=/apps/prod/webtonotion"
+              echo "port=8000"
+              echo "compose_project=webtonotion-prod"
+              echo "cache_volume=webtonotion_webtonotion_cache"
+            } >> "$GITHUB_OUTPUT"
+          else
+            {
+              echo "is_prod=false"
+              echo "environment=development"
+              echo "gh_environment=development"
+              echo "deploy_path=/apps/dev/webtonotion"
+              echo "port=8001"
+              echo "compose_project=webtonotion-dev"
+              echo "cache_volume=webtonotion-dev_cache"
+            } >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Report target
+        run: |
+          echo "Deploying to: ${{ steps.resolve.outputs.environment }}"
+          echo "Path: ${{ steps.resolve.outputs.deploy_path }}"
+          echo "Port: ${{ steps.resolve.outputs.port }}"
+
+  # No image is built until the unit suite is green.
+  test:
+    uses: ./.github/workflows/python-tests.yml
+
+  build-and-push:
+    needs: [setup, test]
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      # Required for the release tag push on master.
+      contents: write
+    outputs:
+      version: ${{ steps.get_version.outputs.version }}
+      image_digest: ${{ steps.push.outputs.digest }}
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Extract version from pyproject.toml
+        id: get_version
+        run: |
+          VERSION=$(grep '^version = ' pyproject.toml | cut -d '"' -f 2)
+          if [ -z "$VERSION" ]; then
+            echo "::error::Could not parse version from pyproject.toml"
+            exit 1
+          fi
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log into Docker Hub
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Extract Docker metadata
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ secrets.DOCKERHUB_USERNAME }}/webtonotion
+          tags: |
+            type=raw,value=dev,enable=${{ needs.setup.outputs.is_prod != 'true' }}
+            type=raw,value=${{ steps.get_version.outputs.version }},enable=${{ needs.setup.outputs.is_prod == 'true' }}
+            type=raw,value=prod,enable=${{ needs.setup.outputs.is_prod == 'true' }}
+
+      - name: Build image for scanning
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: docker/Dockerfile
+          push: false
+          load: true
+          tags: webtonotion:scan-target
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Run Trivy vulnerability scanner
+        if: needs.setup.outputs.is_prod == 'true'
+        uses: aquasecurity/trivy-action@v0.36.0
+        continue-on-error: true
+        with:
+          image-ref: webtonotion:scan-target
+          format: sarif
+          output: trivy-results.sarif
+          severity: CRITICAL,HIGH
+          exit-code: "1"
+
+      - name: Upload Trivy scan results
+        if: needs.setup.outputs.is_prod == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: trivy-sarif-${{ github.sha }}
+          path: trivy-results.sarif
+          if-no-files-found: warn
+
+      - name: Push Docker image
+        id: push
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: docker/Dockerfile
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+  deploy:
+    needs: [setup, build-and-push]
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    environment: ${{ needs.setup.outputs.gh_environment }}
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Pin image by digest
+        run: |
+          DIGEST="${{ needs.build-and-push.outputs.image_digest }}"
+          if [ -z "$DIGEST" ]; then
+            echo "::error::No image digest produced by build-and-push"
+            exit 1
+          fi
+          echo "WEBTONOTION_IMAGE=${{ secrets.DOCKERHUB_USERNAME }}/webtonotion@${DIGEST}" >> "$GITHUB_ENV"
+
+      - name: Create .env file
+        env:
+          NOTION_API_KEY: ${{ secrets.NOTION_API_KEY }}
+          LOGFIRE_TOKEN: ${{ secrets.LOGFIRE_TOKEN }}
+          WHISPER_API_KEY: ${{ secrets.WHISPER_API_KEY }}
+          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+          API_KEY: ${{ secrets.API_KEY }}
+          HOST: ${{ secrets.HOST }}
+          ENVIRONMENT: ${{ needs.setup.outputs.environment }}
+          PORT: ${{ needs.setup.outputs.port }}
+          COMPOSE_PROJECT_NAME: ${{ needs.setup.outputs.compose_project }}
+          CACHE_VOLUME_NAME: ${{ needs.setup.outputs.cache_volume }}
+        run: python scripts/generate_env.py
+
+      - name: Copy config to VPS
+        uses: appleboy/scp-action@v0.1.7
+        with:
+          host: ${{ secrets.VPS_HOST }}
+          username: ${{ secrets.VPS_USERNAME }}
+          port: ${{ secrets.VPS_PORT }}
+          key: ${{ secrets.VPS_SSH_KEY }}
+          source: "docker/docker-compose.yaml,docker/.env,scripts/deploy_remote.sh"
+          target: ${{ needs.setup.outputs.deploy_path }}
+          strip_components: 1
+
+      - name: Deploy to VPS
+        uses: appleboy/ssh-action@v1.0.3
+        env:
+          DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
+          DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
+          WEBTONOTION_IMAGE: ${{ env.WEBTONOTION_IMAGE }}
+          PORT: ${{ needs.setup.outputs.port }}
+          COMPOSE_PROJECT_NAME: ${{ needs.setup.outputs.compose_project }}
+          CACHE_VOLUME_NAME: ${{ needs.setup.outputs.cache_volume }}
+        with:
+          host: ${{ secrets.VPS_HOST }}
+          username: ${{ secrets.VPS_USERNAME }}
+          port: ${{ secrets.VPS_PORT }}
+          key: ${{ secrets.VPS_SSH_KEY }}
+          envs: DOCKERHUB_USERNAME,DOCKERHUB_TOKEN,WEBTONOTION_IMAGE,PORT,COMPOSE_PROJECT_NAME,CACHE_VOLUME_NAME
+          script: |
+            chmod +x ${{ needs.setup.outputs.deploy_path }}/deploy_remote.sh
+            ${{ needs.setup.outputs.deploy_path }}/deploy_remote.sh
+
+  # Tagged only after the deploy actually succeeded, and only if the tag is new,
+  # so a failed deploy cannot leave a phantom release tag.
+  tag-release:
+    needs: [setup, build-and-push, deploy]
+    if: needs.setup.outputs.is_prod == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Create release tag
+        env:
+          VERSION: ${{ needs.build-and-push.outputs.version }}
+        run: |
+          if git rev-parse -q --verify "refs/tags/v${VERSION}" >/dev/null; then
+            echo "::notice::Tag v${VERSION} already exists - skipping"
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git tag -a "v${VERSION}" -m "Release v${VERSION}"
+          git push origin "v${VERSION}"

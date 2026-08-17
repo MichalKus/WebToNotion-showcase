@@ -10,7 +10,7 @@ if [ -f "/app/cookies.txt" ]; then
     cp /app/cookies.txt /app/temp/cookies_secure.txt
     chown appuser:appuser /app/temp/cookies_secure.txt
     chmod 644 /app/temp/cookies_secure.txt
-    
+
     # Override the environment variable to point to the secure copy
     export COOKIES_FILE_PATH="/app/temp/cookies_secure.txt"
 fi

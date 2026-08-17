@@ -1,0 +1,57 @@
+name: PR Version Check
+
+on:
+  pull_request:
+    branches: [master]
+
+permissions:
+  contents: read
+
+jobs:
+  check-version:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Verify version is greater than master
+        run: |
+          set -euo pipefail
+
+          read_version() {
+            grep '^version = ' "$1" | head -n 1 | cut -d '"' -f 2
+          }
+
+          PR_VERSION="$(read_version pyproject.toml)"
+          git show "origin/${{ github.base_ref }}:pyproject.toml" > /tmp/base_pyproject.toml
+          BASE_VERSION="$(read_version /tmp/base_pyproject.toml)"
+
+          echo "PR version:     $PR_VERSION"
+          echo "master version: $BASE_VERSION"
+
+          if [ -z "$PR_VERSION" ]; then
+            echo "::error::Could not parse version from pyproject.toml"
+            exit 1
+          fi
+
+          if [ "$PR_VERSION" = "$BASE_VERSION" ]; then
+            echo "::error::Version $PR_VERSION is unchanged from master. Bump it in pyproject.toml."
+            exit 1
+          fi
+
+          # sort -V puts the greater semver last; the PR version must be it.
+          HIGHEST="$(printf '%s\n%s\n' "$PR_VERSION" "$BASE_VERSION" | sort -V | tail -n 1)"
+          if [ "$HIGHEST" != "$PR_VERSION" ]; then
+            echo "::error::Version $PR_VERSION is lower than master's $BASE_VERSION."
+            exit 1
+          fi
+
+          if git rev-parse -q --verify "refs/tags/v${PR_VERSION}" >/dev/null; then
+            echo "::error::Tag v${PR_VERSION} already exists."
+            exit 1
+          fi
+
+          echo "✅ Version $PR_VERSION is a valid bump from $BASE_VERSION"

@@ -63,7 +63,7 @@ ENV PATH="/root/.deno/bin:${PATH}"
 COPY --from=builder /opt/venv /opt/venv
 
 # Create a non-root user for security.
-RUN groupadd -r appuser && useradd -r -g appuser appuser
+RUN groupadd -r appuser && useradd -m -r -g appuser appuser
 
 # Copy the Gunicorn configuration.
 COPY docker/gunicorn_conf.py .

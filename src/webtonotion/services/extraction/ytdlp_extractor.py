@@ -34,8 +34,11 @@ class YtDlpExtractor(VideoExtractor, LoggerMixin):
             "audioquality": self._get_audio_quality_value(settings.audio_quality),
             "no_warnings": False,
             "quiet": False,
-            "max_filesize": self._parse_file_size(settings.max_file_size),
+            "max_filesize": settings.max_file_size,
+            "socket_timeout": settings.request_timeout,
             "verbose": self.verbose_logging,
+            "retries": settings.max_retries,
+            "fragment_retries": settings.max_retries,
             "remote_components": ["ejs:github"],
             "nocheckcertificate": True,
             "dump_pages": True,
@@ -57,17 +60,6 @@ class YtDlpExtractor(VideoExtractor, LoggerMixin):
                 self.logger.info(f"Using cookies file: {cookie_path}")
             else:
                 self.logger.warning(f"Cookies file configured but not found: {cookie_path}")
-
-    def _parse_file_size(self, size_str: str) -> int:
-        """Parse file size string (e.g., '100MB') into bytes."""
-        size_str = size_str.strip().upper()
-        if size_str.endswith("KB"):
-            return int(float(size_str.replace("KB", "")) * 1024)
-        if size_str.endswith("MB"):
-            return int(float(size_str.replace("MB", "")) * 1024 * 1024)
-        if size_str.endswith("GB"):
-            return int(float(size_str.replace("GB", "")) * 1024 * 1024 * 1024)
-        return int(size_str)
 
     def _get_audio_quality_value(self, quality_str: str) -> int:
         """Convert audio quality string to yt-dlp compatible integer value."""

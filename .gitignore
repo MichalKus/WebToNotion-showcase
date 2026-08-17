@@ -211,3 +211,10 @@ Thumbs.db
 # Backup files
 *.bak
 *.backup
+
+# Claude Code local settings
+.claude/settings.local.json
+
+# Local-only working notes: agent plans, model reviews, research dumps,
+# operational runbooks. Not part of the published documentation.
+.workbench/
