@@ -1,18 +1,21 @@
-"""Dependency injection providers for the WebToNotion application.
+from __future__ import annotations
 
-This module centralizes the creation and management of application dependencies
-using FastAPI's dependency injection system for better testability and maintainability.
-"""
-
+import logging
 import secrets
 from functools import lru_cache
-from typing import Annotated
+from typing import TYPE_CHECKING, Annotated
 
 from fastapi import Depends, HTTPException, Request, Security, status
 from fastapi.security import APIKeyHeader
 
 from webtonotion.config.settings import Settings
 from webtonotion.utils.rate_limiter import RateLimiter
+
+if TYPE_CHECKING:
+    from webtonotion.services.notion_service import NotionService
+    from webtonotion.services.video_scraping_service import VideoScrapingService
+
+logger = logging.getLogger(__name__)
 
 # API Key header configuration
 api_key_header = APIKeyHeader(name="X-API-Key", auto_error=False)
@@ -36,7 +39,7 @@ def get_settings() -> Settings:
 
 def get_notion_service(
     app_settings: Annotated[Settings, Depends(get_settings)],
-) -> "NotionService":
+) -> NotionService:
     """Get NotionService instance with injected settings.
 
     Args:
@@ -51,7 +54,7 @@ def get_notion_service(
     return NotionService(settings=app_settings)
 
 
-def get_video_scraping_service() -> "VideoScrapingService":
+def get_video_scraping_service() -> VideoScrapingService:
     """Get VideoScrapingService instance.
 
     Returns:
@@ -64,12 +67,14 @@ def get_video_scraping_service() -> "VideoScrapingService":
 
 
 async def verify_api_key(
+    request: Request,
     api_key: str | None = Security(api_key_header),
     settings: Settings = Depends(get_settings),
 ) -> str:
     """Verify API key for request authentication.
 
     Args:
+        request: FastAPI request object
         api_key: API key from request header
         settings: Application settings
 
@@ -96,7 +101,7 @@ async def verify_api_key(
     # Use constant-time comparison to prevent timing attacks
     if not secrets.compare_digest(api_key, settings.api_key):
         # Log failed authentication attempt with client IP
-        client_ip = get_client_ip(request) if "request" in locals() else "unknown"
+        client_ip = get_client_ip(request)
         logger.warning(f"Auth failed for IP {client_ip}: Invalid API Key")
 
         raise HTTPException(
