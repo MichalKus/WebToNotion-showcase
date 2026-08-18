@@ -181,11 +181,11 @@ async def notion_health_check(
         logger.error(f"Notion authentication error: {e}")
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
-            detail=f"Notion API authentication failed: {e.message}",
+            detail=f"Notion API authentication failed: {str(e)}",
         )
     except NotionAPIError as e:
         logger.error(f"Notion API error: {e}")
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail=f"Notion API error: {e.message}",
+            detail=f"Notion API error: {str(e)}",
         )

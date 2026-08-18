@@ -6,7 +6,7 @@ database management, page creation, and error handling with rate limiting.
 
 import logging
 from datetime import datetime
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, NoReturn, Optional
 
 from notion_client import Client
 from notion_client.errors import APIResponseError, HTTPResponseError, RequestTimeoutError
@@ -55,7 +55,7 @@ class NotionService:
         # Rate limiter: Notion allows 3 requests per second
         self.rate_limiter = RateLimiter(max_requests=3, time_window=1)
 
-    async def _handle_api_error(self, error: Exception) -> None:
+    async def _handle_api_error(self, error: Exception) -> NoReturn:
         """Handle and convert Notion API errors to service-specific exceptions.
 
         Args:
