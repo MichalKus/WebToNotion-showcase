@@ -13,6 +13,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.httpsredirect import HTTPSRedirectMiddleware
 from fastapi.middleware.trustedhost import TrustedHostMiddleware
 
+from webtonotion.api.chat import router as chat_router
 from webtonotion.api.health import router as health_router
 from webtonotion.api.middleware import (
     ContentLengthMiddleware,
@@ -23,7 +24,7 @@ from webtonotion.api.middleware import (
 from webtonotion.api.process import router as process_router
 from webtonotion.config.logging import setup_logging
 from webtonotion.config.settings import settings
-from webtonotion.dependencies import create_rate_limit_dependency, verify_api_key
+from webtonotion.dependencies import create_rate_limit_dependency, get_session_store, verify_api_key
 
 
 @asynccontextmanager
@@ -41,8 +42,8 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         },
     )
 
-    # Initialize services here if needed
-    # await initialize_services()
+    # Initialize the chat session store schema (idempotent).
+    await get_session_store().init_schema()
 
     yield
 
@@ -87,6 +88,11 @@ def create_app() -> FastAPI:
 
     app.include_router(
         process_router,
+        prefix="/api/v1",
+        dependencies=[Depends(verify_api_key), Depends(rate_limit_dep)],
+    )
+    app.include_router(
+        chat_router,
         prefix="/api/v1",
         dependencies=[Depends(verify_api_key), Depends(rate_limit_dep)],
     )

@@ -4,7 +4,7 @@ This module provides centralized configuration management using Pydantic Setting
 for environment variables and application configuration.
 """
 
-from typing import Annotated, Any
+from typing import Annotated, Any, Literal
 
 from pydantic import BeforeValidator, Field, field_validator
 from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
@@ -87,6 +87,26 @@ class Settings(BaseSettings):
 
     max_retries: int = Field(
         default=3, description="Maximum retry attempts for network operations", ge=0
+    )
+
+    # Agentic Orchestrator Configuration
+    agent_max_requests: int = Field(
+        default=15,
+        description="Maximum model requests per orchestrator run (runaway-loop bound)",
+        ge=1,
+    )
+
+    agent_thinking_level: Literal["off", "minimal", "low", "medium", "high", "xhigh"] = Field(
+        default="medium",
+        description=(
+            "Reasoning effort for the orchestrator agent. 'off' disables thinking; "
+            "higher levels cost more reasoning tokens. Requires a reasoning-capable model."
+        ),
+    )
+
+    session_db_path: str = Field(
+        default="./cache/sessions.db",
+        description="SQLite path for chat session and message-history storage",
     )
 
     # Logging Configuration

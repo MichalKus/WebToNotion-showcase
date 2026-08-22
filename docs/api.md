@@ -128,6 +128,91 @@ The `supported_video_platforms` list here is hardcoded in the endpoint and is **
 than what the service actually accepts** — see
 [the full list](video-processing.md#supported-platforms).
 
+## `POST /api/v1/chat`
+
+Run one turn of the agentic orchestrator. The agent may call read-only tools
+(`find_databases`, `inspect_schema`) and, once a database is confirmed for the
+session, `save_to_notion` — a write attempted before confirmation is refused by
+the tool itself, not by the prompt. Requires `X-API-Key`.
+
+The video tools (`get_video_metadata`, `get_transcript`, `summarize`,
+`ask_about_video`) and the mapper-backed write are not implemented yet; a
+confirmed `save_to_notion` call currently returns a placeholder result. See
+[the design spec](superpowers/specs/2026-08-17-agentic-orchestrator-design.md)
+for the full tool belt this surface is built towards.
+
+### Request
+
+```json
+{
+  "message": "find me a database to save videos to",
+  "conversation_id": "c1",
+  "session_id": null
+}
+```
+
+| Field | Type | Required | Notes |
+|---|---|---|---|
+| `message` | string | yes | Non-empty user message |
+| `conversation_id` | string | yes | Groups messages of one conversation |
+| `session_id` | string \| null | no | Omit to start a new session; pass an existing one to continue it |
+
+### Response — 200
+
+```json
+{
+  "session_id": "3f9c2e7a1b4d4f6e8a0c2d5e7f9a1b3c",
+  "reply": "I found a few candidates: \"Watch Later\" and \"Reading List\". Which one?",
+  "confirmed_database_id": null
+}
+```
+
+`confirmed_database_id` is `null` until a `confirm_database` tool call has run in
+this session; once set, it stays set for the rest of the session unless the user
+corrects it.
+
+### Errors
+
+| Status | Condition |
+|---|---|
+| 401 | Missing or invalid `X-API-Key`, or Notion authentication failed |
+| 404 | `session_id` was supplied but does not exist |
+| 409 | A second message raced this session's write (two concurrent turns on one `session_id`) |
+| 422 | Request body failed validation |
+| 500 | Server `API_KEY` not configured, or an unexpected error |
+| 503 | Notion API returned an error |
+
+### Example
+
+```bash
+curl -X POST "http://localhost:8000/api/v1/chat" \
+  -H "Content-Type: application/json" \
+  -H "X-API-Key: $API_KEY" \
+  -d '{"message":"find me a database to save videos to","conversation_id":"c1"}'
+```
+
+## `GET /api/v1/chat/{session_id}`
+
+Replay a session's full message history (Pydantic AI's own serialized message
+objects — requests, responses, tool calls, and tool returns) for a UI to render.
+Requires `X-API-Key`. Returns 404 if the session does not exist.
+
+```json
+{
+  "session_id": "3f9c2e7a1b4d4f6e8a0c2d5e7f9a1b3c",
+  "messages": [ ... ]
+}
+```
+
+## `DELETE /api/v1/chat/{session_id}`
+
+Delete a session and its message history. Idempotent — deleting an unknown or
+already-deleted `session_id` still returns 200. Requires `X-API-Key`.
+
+```json
+{ "deleted": true, "session_id": "3f9c2e7a1b4d4f6e8a0c2d5e7f9a1b3c" }
+```
+
 ## Health endpoints
 
 | Endpoint | Auth | Purpose |

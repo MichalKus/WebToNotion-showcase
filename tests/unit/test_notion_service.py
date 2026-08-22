@@ -69,14 +69,16 @@ class TestNotionService:
 
     @pytest.mark.asyncio
     async def test_get_databases_success(self):
-        """Test successful database retrieval."""
+        """Test successful database retrieval with data_source filter."""
         service = create_test_service()
 
-        # Mock the client response
+        # Mock the client response returning data_source objects
         mock_response = {
             "results": [
                 {
-                    "id": "db1",
+                    "object": "data_source",
+                    "id": "ds1",
+                    "parent": {"type": "database_id", "database_id": "db1"},
                     "title": [{"plain_text": "Test Database"}],
                     "properties": {"Name": {"type": "title"}},
                     "created_time": "2023-01-01T00:00:00.000Z",
@@ -91,9 +93,41 @@ class TestNotionService:
 
             databases = await service.get_databases()
 
+            mock_search.assert_called_once_with(
+                filter={"property": "object", "value": "data_source"}
+            )
             assert len(databases) == 1
             assert databases[0].id == "db1"
             assert databases[0].name == "Test Database"
+            assert databases[0].properties == {"Name": {"type": "title"}}
+
+    @pytest.mark.asyncio
+    async def test_get_databases_data_source_without_parent_fallback(self):
+        """Test database retrieval when parent is not database_id and fields are minimal."""
+        service = create_test_service()
+
+        mock_response = {
+            "results": [
+                {
+                    "object": "data_source",
+                    "id": "ds_only",
+                    "parent": {"type": "workspace", "workspace": True},
+                    "properties": {"Title": {"type": "title"}},
+                }
+            ]
+        }
+
+        with patch.object(service.client, "search") as mock_search:
+            mock_search.return_value = mock_response
+
+            databases = await service.get_databases()
+
+            assert len(databases) == 1
+            assert databases[0].id == "ds_only"
+            assert databases[0].name == "Database ds_only"
+            assert databases[0].url == "https://notion.so/ds_only"
+            assert databases[0].created_time is not None
+            assert databases[0].last_edited_time is not None
 
     @pytest.mark.asyncio
     async def test_get_databases_api_error(self):
@@ -130,6 +164,37 @@ class TestNotionService:
 
             with pytest.raises(NotionRateLimitError):
                 await service.get_databases()
+
+    @pytest.mark.asyncio
+    async def test_get_database_properties_from_database_container(self):
+        """Test get_database_properties retrieves from first data source in container."""
+        service = create_test_service()
+
+        mock_db_retrieve = {"data_sources": [{"id": "ds_123"}]}
+        mock_ds_retrieve = {"properties": {"Title": {"type": "title"}, "URL": {"type": "url"}}}
+
+        with (
+            patch.object(service.client.databases, "retrieve", return_value=mock_db_retrieve),
+            patch.object(service.client.data_sources, "retrieve", return_value=mock_ds_retrieve),
+        ):
+            props = await service.get_database_properties("db_container_id")
+            assert props == {"Title": {"type": "title"}, "URL": {"type": "url"}}
+
+    @pytest.mark.asyncio
+    async def test_get_database_properties_direct_data_source_fallback(self):
+        """Test get_database_properties falls back to direct data_sources.retrieve on database retrieve error."""
+        service = create_test_service()
+
+        mock_ds_retrieve = {"properties": {"Name": {"type": "title"}}}
+
+        with (
+            patch.object(
+                service.client.databases, "retrieve", side_effect=Exception("Not a db container")
+            ),
+            patch.object(service.client.data_sources, "retrieve", return_value=mock_ds_retrieve),
+        ):
+            props = await service.get_database_properties("ds_123")
+            assert props == {"Name": {"type": "title"}}
 
     @pytest.mark.asyncio
     async def test_create_page_success(self):
@@ -264,7 +329,7 @@ class TestNotionService:
             patch(
                 "webtonotion.services.notion_service.notion_mapper_agent.run",
                 side_effect=Exception("Agent error"),
-            ) as mock_agent_run,
+            ),
             patch.object(
                 service, "get_database_properties", new_callable=AsyncMock
             ) as mock_get_props,
