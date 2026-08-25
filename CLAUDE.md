@@ -16,10 +16,11 @@ FastAPI application that processes video URLs (YouTube, Vimeo, Facebook, Instagr
 - Test unit only: `pytest tests/unit/`
 - Test integration only: `pytest tests/integration/` (hits live external endpoints)
 - Skip slow/API-key tests: `pytest tests/ -m "not slow and not requires_api_keys"`
-- Format checks: `black --check .` and `isort --check-only .`
-- Format apply: `black src/ tests/` and `isort src/ tests/`
-- Lint: `flake8 src/ tests/`
-- Typecheck: `mypy src/`
+- Format checks: `black --check .` and `isort --check-only .` (pre-PR / on request only)
+- Format apply: `black src/ tests/` and `isort src/ tests/` (pre-PR / on request only)
+- Lint: `flake8 src/ tests/` (pre-PR / on request only)
+- Typecheck: `mypy src/` (pre-PR / on request only)
+- Verification after changes: run `pytest` only. Never run `mypy`, `flake8`, `black`, or `isort` unless explicitly requested.
 - Docker build: `docker build -t webtonotion -f docker/Dockerfile .`
 - Generate `.env` (used by CI/deploy): `python scripts/generate_env.py`
 
@@ -73,6 +74,7 @@ Errors are caught by type (`VideoScrapingError`, `NotionAuthenticationError`, `N
 - Never modify files in `cache/` or `tmp/` without ensuring automatic cleanup (config `cleanup_temp_files`).
 - Do not run VPS deployment scripts (`scripts/deploy_remote.sh`) without explicit user permission — `scripts/generate_env.py` writes deploy secrets into `docker/.env`.
 - Do not mock Notion payload structures in tests; use `NotionPagePayload` directly.
+- Never run `mypy`, `flake8`, `black`, or `isort` during routine development/verification after code changes. Run **`pytest` only**. Reserve linters, formatters, and typecheckers for the pre-PR checklist or when explicitly requested by the user.
 
 ## Git / CI
 

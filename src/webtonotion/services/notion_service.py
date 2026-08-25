@@ -104,37 +104,77 @@ class NotionService:
 
         try:
             logger.info("Fetching Notion databases")
-            response = self.client.search(filter={"property": "object", "value": "database"})
+            response = self.client.search(filter={"property": "object", "value": "data_source"})
 
             databases = []
+            seen_db_ids: set = set()
             for db_data in response.get("results", []):
                 try:
-                    # Extract database information
-                    db_id = db_data["id"]
+                    # In Notion API 2025-09-03, search returns data_source objects whose parent is the database
+                    parent_info = db_data.get("parent", {})
+                    parent_db_id = (
+                        parent_info.get("database_id")
+                        if isinstance(parent_info, dict)
+                        and parent_info.get("type") == "database_id"
+                        else None
+                    )
+                    db_id = parent_db_id or db_data.get("id")
+                    if not db_id:
+                        continue
+                    if db_id in seen_db_ids:
+                        # A database with multiple data sources yields one search
+                        # result per source; only the first is surfaced for now so
+                        # candidates never carry a duplicate id with mismatched
+                        # properties.
+                        logger.debug(f"Skipping additional data source for database {db_id}")
+                        continue
 
                     # Get database title
                     title_property = db_data.get("title", [])
                     name = ""
-                    if title_property:
-                        name = "".join([text.get("plain_text", "") for text in title_property])
+                    if title_property and isinstance(title_property, list):
+                        name = "".join(
+                            [
+                                text.get("plain_text", "")
+                                for text in title_property
+                                if isinstance(text, dict)
+                            ]
+                        )
 
                     # If no title, use a default name
                     if not name:
                         name = f"Database {db_id[:8]}"
 
+                    # Handle created_time and last_edited_time safely
+                    now = datetime.now()
+                    created_time_raw = db_data.get("created_time")
+                    if created_time_raw:
+                        created_time = datetime.fromisoformat(
+                            created_time_raw.replace("Z", "+00:00")
+                        )
+                    else:
+                        created_time = now
+
+                    last_edited_time_raw = db_data.get("last_edited_time")
+                    if last_edited_time_raw:
+                        last_edited_time = datetime.fromisoformat(
+                            last_edited_time_raw.replace("Z", "+00:00")
+                        )
+                    else:
+                        last_edited_time = now
+
+                    url = db_data.get("url") or f"https://notion.so/{db_id.replace('-', '')}"
+
                     database = NotionDatabase(
                         id=db_id,
                         name=name,
                         properties=db_data.get("properties", {}),
-                        url=db_data.get("url"),
-                        created_time=datetime.fromisoformat(
-                            db_data["created_time"].replace("Z", "+00:00")
-                        ),
-                        last_edited_time=datetime.fromisoformat(
-                            db_data["last_edited_time"].replace("Z", "+00:00")
-                        ),
+                        url=url,
+                        created_time=created_time,
+                        last_edited_time=last_edited_time,
                     )
                     databases.append(database)
+                    seen_db_ids.add(db_id)
 
                 except (KeyError, ValueError) as e:
                     logger.warning(f"Failed to parse database {db_data.get('id', 'unknown')}: {e}")
@@ -294,24 +334,40 @@ class NotionService:
         await self.rate_limiter.wait_if_needed()
 
         try:
-            # First get database details
             logger.info(f"Fetching properties for database {database_id}")
-            database_details = self.client.databases.retrieve(
-                database_id,
-            )
+            # In Notion API 2025-09-03, database_id could be a container database ID or a data source ID.
+            # Only the initial retrieve is speculative (the id might already be a
+            # data_source_id); once it succeeds, a failure below is a real error
+            # and must not be masked by retrying with the wrong kind of id.
+            try:
+                database_details = self.client.databases.retrieve(database_id)
+            except Exception:
+                database_details = None
+
+            if database_details is None:
+                # database_id was not a database id; it may already be a data_source_id.
+                ds_info = self.client.data_sources.retrieve(data_source_id=database_id)
+                properties = ds_info["properties"]
+                logger.info(f"Found {len(properties)} properties in data source")
+                return properties
+
             logger.debug(f"Database details: {database_details}")
 
-            # Retrieve data source from database details
             data_sources = database_details.get("data_sources", [])
-            data_source_id = data_sources[0]["id"]
-            logger.debug(f"Data source ID: {data_source_id}")
+            if data_sources:
+                data_source_id = data_sources[0]["id"]
+                logger.debug(f"Data source ID: {data_source_id}")
+                ds_info = self.client.data_sources.retrieve(data_source_id=data_source_id)
+                properties = ds_info["properties"]
+                logger.info(f"Found {len(properties)} properties in data source")
+                return properties
 
-            # Now get properties from the data source
-            ds_info = self.client.data_sources.retrieve(data_source_id=data_source_id)
-            properties = ds_info["properties"]
-            logger.info(f"Found {len(properties)} properties in data source")
+            if "properties" in database_details:
+                return database_details["properties"]
 
-            return properties
+            raise NotionAPIError(
+                f"Database {database_id} has no data sources and no properties in its schema"
+            )
         except Exception as e:
             logger.error(f"Failed to get database properties for {database_id}: {e}")
             await self._handle_api_error(e)

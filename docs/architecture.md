@@ -5,16 +5,38 @@ It has no database of its own — all state is either in-flight, in the file cac
 
 ## Layers
 
-Dependencies flow in one direction only: `api` → `services` → `models` + `config`.
-Services and models never import from `api` or `main`.
+Dependencies flow in one direction only: `api` → `agents` → `services` → `models` + `config`.
+Services and models never import from `api`, `agents`, or `main`.
 
 | Layer | Package | Responsibility |
 |---|---|---|
-| API | `src/webtonotion/api/` | Routers (`process`, `health`) and middleware |
+| API | `src/webtonotion/api/` | Routers (`process`, `chat`, `health`) and middleware |
 | DI | `src/webtonotion/dependencies.py` | Settings, service construction, auth, rate limiting |
+| Agents | `src/webtonotion/agents/` | Multi-turn orchestrator, its tools, chat service, session store |
 | Services | `src/webtonotion/services/` | Extraction, analysis, storage, Notion integration |
-| Models | `src/webtonotion/models/` | Pydantic models for requests, video content, Notion payloads |
+| Models | `src/webtonotion/models/` | Pydantic models for requests, video content, Notion payloads, chat |
 | Config | `src/webtonotion/config/` | `settings.py` (pydantic-settings), `logging.py` (structured logging + Logfire) |
+
+### Agent breakdown
+
+```
+agents/
+├── orchestrator.py         build_orchestrator() — the multi-turn chat agent (factory, not
+│                            module-level; built once by a DI singleton, never at import)
+├── deps.py                  AgentDeps — services + session injected via RunContext
+├── capabilities.py          ProcessHistory (history-trim policy) + tool registration
+├── chat_service.py          ChatService — one turn: load history, run, persist, reply
+├── tools/
+│   └── notion.py            find_databases, inspect_schema, confirm_database, save_to_notion
+└── session/
+    ├── store.py              SessionStore ABC, Session, SessionConflictError/NotFoundError
+    └── sqlite_store.py        SqliteStore — WAL SQLite, append-only messages
+```
+
+`save_to_notion` currently only enforces the confirm-gate; the mapper-backed write
+and the video tools (`get_video_metadata`, `get_transcript`, `summarize`,
+`ask_about_video`) land in a later PR — see the
+[design spec](superpowers/specs/2026-08-17-agentic-orchestrator-design.md).
 
 ### Service breakdown
 
@@ -99,6 +121,43 @@ sequenceDiagram
 The schema fetch and video-URL check happen **before** extraction, so an unreachable
 database or unsupported URL fails in under a second rather than after a download.
 
+## Chat sequence
+
+```mermaid
+sequenceDiagram
+    participant C as Client
+    participant R as chat router
+    participant S as ChatService
+    participant DB as SqliteStore
+    participant A as orchestrator Agent
+    participant N as NotionService
+
+    C->>R: POST /api/v1/chat {message, conversation_id, session_id?}
+    R->>R: verify_api_key, rate limit
+    R->>S: handle_message(...)
+    S->>DB: get or create session
+    S->>DB: load_history(session.id, limit)
+    S->>A: run(message, message_history, deps, usage_limits)
+
+    loop tool calls, bounded by agent_max_requests
+        A->>N: find_databases / inspect_schema (read-only)
+        N-->>A: candidates / schema
+        A->>DB: confirm_database (sets the write gate)
+        A->>A: save_to_notion checks session.confirmed_database_id
+    end
+
+    A-->>S: reply text + new_messages()
+    S->>DB: append_messages(seq_start, payloads)
+    S->>DB: touch(session.id)
+    S-->>R: ChatReply
+    R-->>C: 200 {session_id, reply, confirmed_database_id}
+```
+
+The write gate is a single column, `sessions.confirmed_database_id`. `save_to_notion`
+reads it directly rather than trusting the system prompt to have remembered a rule,
+which is also the prompt-injection defense: untrusted video text in the model's
+context cannot talk it past a check on server-held state.
+
 ## Middleware
 
 Registered in `main.py`; the first added is outermost.
@@ -112,11 +171,17 @@ Registered in `main.py`; the first added is outermost.
 
 ## Authentication and rate limiting
 
-Both are router-level dependencies on the process router, not per-endpoint decorators:
+Both are router-level dependencies, attached at inclusion rather than per-endpoint
+decorators. The chat router follows the exact same pattern as the process router:
 
 ```python
 app.include_router(
     process_router,
+    prefix="/api/v1",
+    dependencies=[Depends(verify_api_key), Depends(rate_limit_dep)],
+)
+app.include_router(
+    chat_router,
     prefix="/api/v1",
     dependencies=[Depends(verify_api_key), Depends(rate_limit_dep)],
 )
@@ -140,7 +205,7 @@ The health router is mounted without those dependencies, so `/health/`, `/health
 |---|---|---|
 | yt-dlp | Video metadata + audio download | `COOKIES_FILE_PATH`, `MAX_FILE_SIZE`, `MAX_VIDEO_DURATION` |
 | Groq | Whisper audio transcription | `WHISPER_API_KEY`, `WHISPER_MODEL` |
-| OpenRouter | Content analysis + Notion mapping agents | `OPENROUTER_API_KEY`, `OPENROUTER_MODEL` |
+| OpenRouter | Content analysis, Notion mapping, and chat orchestrator agents | `OPENROUTER_API_KEY`, `OPENROUTER_MODEL` |
 | Notion | Schema fetch + page creation | `NOTION_API_KEY`, `NOTION_VERSION` |
 | Logfire | Tracing and structured logs | `LOGFIRE_TOKEN` (optional) |
 
@@ -154,6 +219,19 @@ uses it to normalise non-mp3 downloads to mono 16 kHz mp3.
 | Exception | Status |
 |---|---|
 | `VideoScrapingError` | 422 |
+| `NotionAuthenticationError` | 401 |
+| `NotionAPIError` | 503 |
+| `WebToNotionError` | 500 |
+| Anything else | 500 (detail suppressed) |
+
+`api/chat.py` follows the same style, plus two errors specific to the session store
+(`src/webtonotion/agents/session/store.py`), raised by `ChatService` and never seen
+outside it:
+
+| Exception | Status |
+|---|---|
+| `SessionNotFoundError` | 404 |
+| `SessionConflictError` | 409 |
 | `NotionAuthenticationError` | 401 |
 | `NotionAPIError` | 503 |
 | `WebToNotionError` | 500 |
