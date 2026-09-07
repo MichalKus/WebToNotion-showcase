@@ -4,7 +4,7 @@ Tests find_databases and inspect_schema tools in webtonotion.agents.tools.notion
 """
 
 from datetime import datetime, timezone
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 from pydantic_ai import RunContext
@@ -65,6 +65,8 @@ async def test_find_databases_filters_and_ranks() -> None:
         session=_make_session(),
         store=AsyncMock(),
         settings=settings,
+        video_service=MagicMock(),
+        cache=MagicMock(),
     )
     ctx: RunContext[AgentDeps] = RunContext(deps=deps, model=TestModel(), usage=RunUsage())
 
@@ -111,6 +113,8 @@ async def test_inspect_schema_extracts_types_and_options() -> None:
         session=_make_session(),
         store=AsyncMock(),
         settings=settings,
+        video_service=MagicMock(),
+        cache=MagicMock(),
     )
     ctx: RunContext[AgentDeps] = RunContext(deps=deps, model=TestModel(), usage=RunUsage())
 

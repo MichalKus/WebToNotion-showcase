@@ -2,6 +2,7 @@
 
 import time
 from pathlib import Path
+from typing import Any
 
 import groq
 import logfire
@@ -9,6 +10,39 @@ import logfire
 from webtonotion.config.logging import LoggerMixin
 from webtonotion.config.settings import settings
 from webtonotion.exceptions import VideoScrapingError
+from webtonotion.models.transcript import StoredTranscript, TranscriptSegment
+
+
+def _parse_segments(raw_segments: Any) -> list[TranscriptSegment]:
+    """Convert Whisper ``verbose_json`` segments into :class:`TranscriptSegment`.
+
+    Groq returns dicts, but the SDK may hand back objects depending on version, and a
+    model without segment support returns nothing at all. Anything unparseable is
+    skipped rather than failing the transcription — the text is the load-bearing part;
+    timestamps are an enhancement.
+    """
+    if not raw_segments:
+        return []
+
+    segments: list[TranscriptSegment] = []
+    for raw in raw_segments:
+        try:
+            if isinstance(raw, dict):
+                start, end, text = raw.get("start"), raw.get("end"), raw.get("text")
+            else:
+                start, end, text = (
+                    getattr(raw, "start", None),
+                    getattr(raw, "end", None),
+                    getattr(raw, "text", None),
+                )
+            if start is None or end is None or text is None:
+                continue
+            segments.append(
+                TranscriptSegment(start=float(start), end=float(end), text=str(text).strip())
+            )
+        except (TypeError, ValueError):
+            continue
+    return segments
 
 
 class AudioTranscriber(LoggerMixin):
@@ -22,8 +56,12 @@ class AudioTranscriber(LoggerMixin):
         self.cleanup_temp_files = settings.cleanup_temp_files
         self.temp_dir = Path(settings.temp_dir)
 
-    async def transcribe(self, audio_path: Path) -> str:
-        """Transcribe audio file using Groq Whisper API directly."""
+    async def transcribe(self, audio_path: Path) -> StoredTranscript:
+        """Transcribe an audio file with Groq Whisper, keeping segment timestamps.
+
+        ``verbose_json`` costs the same as ``text`` and additionally yields per-segment
+        start/end times, which is what lets answers cite positions in the video.
+        """
         with logfire.span("audio_transcription.transcribe") as span:
             try:
                 # Log transcription request details
@@ -49,21 +87,29 @@ class AudioTranscriber(LoggerMixin):
                         response = await self.groq_client.audio.transcriptions.create(
                             file=(audio_path.name, audio_file, "audio/mpeg"),
                             model=settings.whisper_model,
-                            response_format="text",
+                            response_format="verbose_json",
                         )
 
-                    transcription_length = len(response.strip()) if response else 0
-                    api_span.set_attribute("result.length", transcription_length)
-                    api_span.set_attribute(
-                        "result.has_content", bool(response and response.strip())
+                    text = (getattr(response, "text", "") or "").strip()
+                    segments = _parse_segments(getattr(response, "segments", None))
+                    transcript = StoredTranscript(
+                        text=text,
+                        language=getattr(response, "language", None),
+                        duration=getattr(response, "duration", None),
+                        segments=segments,
                     )
+
+                    api_span.set_attribute("result.length", len(text))
+                    api_span.set_attribute("result.has_content", bool(text))
+                    api_span.set_attribute("result.segment_count", len(segments))
 
                 processing_time = time.time() - start_time
                 logfire.info(
                     "Audio transcription completed successfully",
                     processing_time=processing_time,
-                    transcript_length=len(response.strip()) if response else 0,
-                    transcript_content=response.strip(),
+                    transcript_length=len(transcript.text),
+                    transcript_content=transcript.text,
+                    segment_count=len(transcript.segments),
                     audio_path=str(audio_path),
                 )
 
@@ -77,7 +123,7 @@ class AudioTranscriber(LoggerMixin):
                     self.logger.debug(f"Cleaned up temporary audio file: {audio_path}")
                     logfire.debug("Cleaned up temporary audio file", audio_path=str(audio_path))
 
-                return response.strip()
+                return transcript
 
             except Exception as e:
                 error_msg = str(e)

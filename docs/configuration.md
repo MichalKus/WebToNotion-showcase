@@ -72,6 +72,17 @@ The service will not work without these four:
 Rate-limit state is a per-process dictionary. With `WORKERS > 1` the effective limit is
 multiplied by the worker count.
 
+## Agentic chat orchestrator
+
+| Variable | Default | Notes |
+|---|---|---|
+| `AGENT_MAX_REQUESTS` | `60` | Max model requests across one chat turn -- orchestrator *and* sub-agent runs combined. `summarize`/`ask_about_video` delegate to their own `agent.run` calls sharing this budget via `ctx.usage`, so this is a runaway-loop bound generous enough to cover a worst-case map-reduce summarization (`SUMMARY_MAP_REDUCE_THRESHOLD_CHARS / SUMMARY_MAP_REDUCE_WINDOW_CHARS + 1` requests), not the cost bound |
+| `AGENT_MAX_TOTAL_TOKENS` | `500000` | Max total tokens (input+output) across the same turn-wide budget. This is the actual cost guard once sub-agent runs share usage with the orchestrator. `0` disables it |
+
+Exceeding either limit raises `LLMError` (HTTP 429) rather than a 500, and the
+turn is not persisted -- see [api.md](api.md) for the `usage` field this budget is
+measured against.
+
 ## Server
 
 | Variable | Default | Notes |

@@ -7,6 +7,7 @@ order: find_databases -> inspect_schema -> confirm_database -> final reply.
 
 from datetime import datetime, timezone
 from typing import Any
+from unittest.mock import MagicMock
 
 import pytest
 from pydantic_ai import ModelResponse, TextPart, ToolCallPart, capture_run_messages, models
@@ -119,6 +120,8 @@ async def test_orchestrator_runs_selection_tools_in_order() -> None:
         session=session,
         store=store,
         settings=settings,
+        video_service=MagicMock(),
+        cache=MagicMock(),
     )
 
     with capture_run_messages() as captured:
@@ -138,6 +141,11 @@ async def test_orchestrator_runs_selection_tools_in_order() -> None:
     # confirm_database flipped the gate on both the store and the in-memory session.
     assert store.confirmed["s1"] == "db1"
     assert session.confirmed_database_id == "db1"
+
+
+def test_build_orchestrator_names_the_agent_for_observability() -> None:
+    agent = build_orchestrator(settings)
+    assert agent.name == "orchestrator"
 
 
 def test_build_orchestrator_openrouter_reasoning_settings() -> None:

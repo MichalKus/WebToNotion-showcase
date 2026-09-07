@@ -1,17 +1,19 @@
 """Chat API endpoints for the agentic orchestrator.
 
-Exposes the multi-turn chat surface: a JSON request/response turn, a history
-replay for UIs, and session teardown. The streaming (SSE) route is deferred to a
-later PR — it becomes meaningful once the slow video tools exist.
+Exposes the multi-turn chat surface: a JSON request/response turn, a streaming
+(SSE) turn for slow video tools, a history replay for UIs, and session teardown.
 
 Auth and rate limiting are attached at router inclusion in ``main.py`` (exactly
 as for the process router), not per endpoint.
 """
 
+import json
 import logging
+from collections.abc import AsyncIterator
 from typing import Annotated, Any, Dict
 
 from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi.responses import StreamingResponse
 
 from webtonotion.agents.chat_service import ChatService
 from webtonotion.agents.session.store import SessionConflictError, SessionNotFoundError
@@ -89,6 +91,50 @@ async def chat(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="An unexpected error occurred while handling the chat message",
         )
+
+
+@router.post(
+    "/stream",
+    summary="Send a chat message and stream the run",
+    description="Run one orchestrator turn, streaming Server-Sent Events as it happens: "
+    "`session`, then `thinking` / `tool_call` / `tool_return` / `text` as the agent works, "
+    "then a final `reply` (or `error`). Transcribing a long video takes 30-60 seconds, so "
+    "this is the route a UI should use.",
+    response_class=StreamingResponse,
+)
+async def chat_stream(
+    request: ChatRequest,
+    chat_service: Annotated[ChatService, Depends(get_chat_service)],
+) -> StreamingResponse:
+    """Handle a single chat turn, streamed as Server-Sent Events.
+
+    Errors after the response has started cannot change the status code, so they are
+    delivered as a terminal ``error`` event rather than an HTTP status. Only failures
+    that occur before streaming begins -- an unknown session -- surface as a status.
+    """
+    try:
+        session_exists_check = request.session_id
+        if session_exists_check is not None:
+            await chat_service.get_history(session_exists_check)
+    except SessionNotFoundError as e:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail=f"Session not found: {str(e)}"
+        )
+
+    async def event_source() -> AsyncIterator[str]:
+        async for event in chat_service.stream_message(
+            conversation_id=request.conversation_id,
+            message=request.message,
+            session_id=request.session_id,
+        ):
+            payload = json.dumps(event["data"], ensure_ascii=False, default=str)
+            yield f"event: {event['event']}\ndata: {payload}\n\n"
+
+    return StreamingResponse(
+        event_source(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
 
 
 @router.get(

@@ -19,8 +19,7 @@ FastAPI application that processes video URLs (YouTube, Vimeo, Facebook, Instagr
 - Format checks: `black --check .` and `isort --check-only .` (pre-PR / on request only)
 - Format apply: `black src/ tests/` and `isort src/ tests/` (pre-PR / on request only)
 - Lint: `flake8 src/ tests/` (pre-PR / on request only)
-- Typecheck: `mypy src/` (pre-PR / on request only)
-- Verification after changes: run `pytest` only. Never run `mypy`, `flake8`, `black`, or `isort` unless explicitly requested.
+- Verification: run `pytest` only when completing code implementation in `src/` or on explicit user request. Never run tests for documentation, `.workbench/`, session summaries (`/summarize`), discussions, or merely because the user edited a file. Never run `mypy`, `flake8`, `black`, or `isort` unless explicitly requested.
 - Docker build: `docker build -t webtonotion -f docker/Dockerfile .`
 - Generate `.env` (used by CI/deploy): `python scripts/generate_env.py`
 
@@ -74,7 +73,7 @@ Errors are caught by type (`VideoScrapingError`, `NotionAuthenticationError`, `N
 - Never modify files in `cache/` or `tmp/` without ensuring automatic cleanup (config `cleanup_temp_files`).
 - Do not run VPS deployment scripts (`scripts/deploy_remote.sh`) without explicit user permission — `scripts/generate_env.py` writes deploy secrets into `docker/.env`.
 - Do not mock Notion payload structures in tests; use `NotionPagePayload` directly.
-- Never run `mypy`, `flake8`, `black`, or `isort` during routine development/verification after code changes. Run **`pytest` only**. Reserve linters, formatters, and typecheckers for the pre-PR checklist or when explicitly requested by the user.
+- Run tests (`pytest`) only when actively completing code implementation/refactoring in `src/` or when explicitly requested. Never run tests automatically for documentation, `.workbench/` files, session summaries (`/summarize`), discussions, or merely in response to user edits in the IDE. Never run `mypy`, `flake8`, `black`, or `isort` during routine development — reserve them for the pre-PR checklist or when explicitly requested by the user.
 
 ## Git / CI
 

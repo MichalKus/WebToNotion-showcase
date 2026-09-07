@@ -7,7 +7,8 @@ Two concerns live here so the orchestrator wires them in one line each:
   window can be generous. The chat service (a later PR) reads ``limit`` when it
   calls ``store.load_history``.
 - :func:`register_notion_tools` — registers the four read-only Notion selection
-  tools (plus the write gate) onto an agent, keeping tool wiring out of the
+  tools (plus the write gate) onto an agent, and :func:`register_video_tools` —
+  registers the four video read-path tools — keeping tool wiring out of the
   orchestrator's construction body.
 """
 
@@ -23,6 +24,12 @@ from webtonotion.agents.tools.notion import (
     find_databases,
     inspect_schema,
     save_to_notion,
+)
+from webtonotion.agents.tools.video import (
+    ask_about_video,
+    get_transcript,
+    get_video_metadata,
+    summarize,
 )
 
 # Default number of prior exchanges to keep when trimming history.
@@ -63,3 +70,11 @@ def register_notion_tools(agent: Agent[AgentDeps, str]) -> None:
     agent.tool(inspect_schema)
     agent.tool(confirm_database)
     agent.tool(save_to_notion)
+
+
+def register_video_tools(agent: Agent[AgentDeps, str]) -> None:
+    """Register the video read-path tools onto ``agent``."""
+    agent.tool(get_video_metadata)
+    agent.tool(get_transcript)
+    agent.tool(summarize)
+    agent.tool(ask_about_video)

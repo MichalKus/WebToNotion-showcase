@@ -6,6 +6,7 @@ types the orchestrator tools produce. Every tool returns one of these rather tha
 free text or a large payload, so conversation history stays compact.
 """
 
+from datetime import datetime
 from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
@@ -59,6 +60,23 @@ class TraceStep(BaseModel):
     )
 
 
+class UsageSummary(BaseModel):
+    """Model usage for one chat turn, across the orchestrator and any sub-agent runs.
+
+    Sub-agent runs (``summarize``/``ask_about_video``) share the orchestrator's
+    ``RunContext.usage``, so this reflects the whole turn's cost, not just the
+    orchestrator's own requests.
+    """
+
+    requests: int = Field(..., description="Total model requests made during the turn")
+    input_tokens: int = Field(..., description="Total input tokens across all requests")
+    output_tokens: int = Field(..., description="Total output tokens across all requests")
+    total_tokens: int = Field(..., description="input_tokens + output_tokens")
+    cost: float | None = Field(
+        default=None, description="Estimated cost in USD, when the provider reports one"
+    )
+
+
 class ChatReply(BaseModel):
     """Outgoing chat reply.
 
@@ -69,6 +87,7 @@ class ChatReply(BaseModel):
         trace: Chronological steps of this turn — reasoning, tool calls and their
             results, and any intermediate text — for clients that want to show why
             the agent acted, not just its final answer.
+        usage: Model usage for the turn, including any sub-agent runs.
     """
 
     session_id: str = Field(..., description="Session identifier for this turn")
@@ -78,6 +97,9 @@ class ChatReply(BaseModel):
     )
     trace: list[TraceStep] = Field(
         default_factory=list, description="Chronological reasoning/tool-call trace for this turn"
+    )
+    usage: UsageSummary | None = Field(
+        default=None, description="Model usage for the turn, including sub-agent runs"
     )
 
 
@@ -121,3 +143,66 @@ class ToolError(BaseModel):
 
     reason: str = Field(..., description="Short failure reason")
     detail: str | None = Field(default=None, description="Optional additional detail")
+
+
+class VideoMetadata(BaseModel):
+    """Chat-sized video metadata returned by ``get_video_metadata``."""
+
+    url: str = Field(..., description="Video URL")
+    title: str = Field(..., description="Video title")
+    author: str = Field(default="", description="Creator or channel name")
+    duration: float | None = Field(default=None, description="Duration in seconds", ge=0)
+    platform: str = Field(default="unknown", description="Source platform, e.g. 'youtube'")
+    published_at: datetime | None = Field(default=None, description="Publication timestamp")
+
+
+SummaryStyle = Literal[
+    "concise",
+    "bullet points",
+    "detailed",
+    "for a beginner",
+    "key takeaways",
+]
+
+SummaryLength = Literal["short", "medium", "long"]
+
+
+class SummaryResult(BaseModel):
+    """A summary of one video, produced by an ephemeral sub-agent run."""
+
+    url: str = Field(..., description="Video URL the summary describes")
+    style: SummaryStyle = Field(
+        ...,
+        description="Requested style: 'concise', 'bullet points', 'detailed', 'for a beginner', or 'key takeaways'",
+    )
+    length: SummaryLength = Field(..., description="Requested length: 'short', 'medium', or 'long'")
+    summary: str = Field(..., description="The summary text")
+
+
+class AnswerResult(BaseModel):
+    """An answer to a question about one video, plus the excerpts it rests on."""
+
+    url: str = Field(..., description="Video URL the answer is about")
+    question: str = Field(..., description="The question asked")
+    answer: str = Field(..., description="The answer text")
+    excerpts: list[str] = Field(
+        default_factory=list, description="Timestamped transcript excerpts supporting the answer"
+    )
+
+
+class AnswerAttempt(BaseModel):
+    """Structured output of the answering sub-agent.
+
+    ``sufficient`` is the escalation signal: a first pass runs against the compact
+    context (cached summary plus a timestamped segment index); when the sub-agent
+    reports the context was not enough, the caller re-runs it against the full
+    transcript. Most follow-up questions never need the raw text.
+    """
+
+    answer: str = Field(..., description="Best answer from the context provided")
+    sufficient: bool = Field(
+        ..., description="Whether the provided context was enough to answer confidently"
+    )
+    excerpts: list[str] = Field(
+        default_factory=list, description="Quoted excerpts, timestamped where available"
+    )

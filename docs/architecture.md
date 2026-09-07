@@ -26,17 +26,44 @@ agents/
 ├── deps.py                  AgentDeps — services + session injected via RunContext
 ├── capabilities.py          ProcessHistory (history-trim policy) + tool registration
 ├── chat_service.py          ChatService — one turn: load history, run, persist, reply
+├── prompts.py                build_transcript_prompt() — the one cache-stable prompt
+│                            builder every sub-agent call goes through
+├── subagents.py              Ephemeral summarization/answering sub-agents: escalation,
+│                            map-reduce above a size ceiling
 ├── tools/
-│   └── notion.py            find_databases, inspect_schema, confirm_database, save_to_notion
+│   ├── notion.py             find_databases, inspect_schema, confirm_database, save_to_notion
+│   └── video.py              get_video_metadata, get_transcript, summarize, ask_about_video
 └── session/
     ├── store.py              SessionStore ABC, Session, SessionConflictError/NotFoundError
     └── sqlite_store.py        SqliteStore — WAL SQLite, append-only messages
 ```
 
-`save_to_notion` currently only enforces the confirm-gate; the mapper-backed write
-and the video tools (`get_video_metadata`, `get_transcript`, `summarize`,
-`ask_about_video`) land in a later PR — see the
+`save_to_notion` currently only enforces the confirm-gate; the mapper-backed
+write lands in a later PR — see the
 [design spec](superpowers/specs/2026-08-17-agentic-orchestrator-design.md).
+
+### Sub-agent layer
+
+`get_transcript`, `summarize`, and `ask_about_video` (`tools/video.py`) never
+hand a transcript to the orchestrator. `get_transcript` returns a
+`TranscriptRef` — a hash, character count, and preview sized for chat context —
+and the other two tools start an **ephemeral** sub-agent run, built by a factory
+in `subagents.py` (`build_summary_agent` / `build_answer_agent`, never at module
+import — constructing an OpenRouter model needs an API key). The transcript body
+enters that run and only that run; the run ends when the tool returns a
+`SummaryResult` or `AnswerResult`, and nothing about the transcript's contents is
+ever appended to the session's persisted message history. This is what keeps a
+50k-character transcript from bloating every subsequent turn's context.
+
+Every sub-agent prompt is built by `prompts.build_transcript_prompt`, one
+function, deliberately: it produces a stable prefix (a fixed header plus the
+transcript/summary/segment-index body) followed by a `CachePoint`, so a
+provider's prompt cache can be reused across a video's follow-up questions.
+`subagents.py` layers two further cost controls on top of that cache —
+escalation (a compact context first, the full transcript only when the sub-agent
+reports it was insufficient) and map-reduce above
+`SUMMARY_MAP_REDUCE_THRESHOLD_CHARS`. See
+[video-processing.md](video-processing.md#prompt-caching) for the mechanics.
 
 ### Service breakdown
 
@@ -158,6 +185,19 @@ reads it directly rather than trusting the system prompt to have remembered a ru
 which is also the prompt-injection defense: untrusted video text in the model's
 context cannot talk it past a check on server-held state.
 
+### Streaming variant
+
+`POST /api/v1/chat/stream` (`ChatService.stream_message`) runs the identical
+turn through `agent.run_stream_events` instead of `agent.run`, emitting a
+`session` event immediately and then a `tool_call`/`tool_return`/`thinking`/`text`
+event as each one occurs, instead of returning silently until the whole turn
+finishes. Once the run completes, `stream_message` calls the exact same
+`ChatService._persist_turn` that `handle_message` calls — there is one
+persistence path, not two, so the write-gate rollback on a lost session-conflict
+race and the `ChatReply`/`trace` construction behave identically regardless of
+which route a client used. The persisted result is then re-emitted once more, in
+full, as the terminal `reply` event.
+
 ## Middleware
 
 Registered in `main.py`; the first added is outermost.
@@ -249,9 +289,13 @@ built.
 synchronous. Wrap them with `asyncio.to_thread` rather than calling them directly from an
 `async def`.
 
-**Analysis failures degrade, they don't fail.** `ContentAnalyzer.analyze` catches every
-exception and returns an empty `ContentAnalysisResult` with neutral sentiment, so a quota
-error at the analysis step still produces a Notion page — just a thinner one.
+**Analysis failures are typed, not silent.** `ContentAnalyzer.analyze` raises
+`ContentProcessingError` on any failure rather than returning an empty,
+neutral-sentiment `ContentAnalysisResult` — a plausible-looking empty analysis is
+one an agent (or a person) downstream would believe. A quota error at the
+analysis step now fails the `/process/url` request (422) instead of silently
+producing a thinner page; the video tools' `summarize`/`ask_about_video` catch it
+and return a `ToolError` the orchestrator can explain instead.
 
 ## Related
 

@@ -131,13 +131,14 @@ than what the service actually accepts** — see
 ## `POST /api/v1/chat`
 
 Run one turn of the agentic orchestrator. The agent may call read-only tools
-(`find_databases`, `inspect_schema`) and, once a database is confirmed for the
-session, `save_to_notion` — a write attempted before confirmation is refused by
-the tool itself, not by the prompt. Requires `X-API-Key`.
+(`find_databases`, `inspect_schema`), the video read-path tools
+(`get_video_metadata`, `get_transcript`, `summarize`, `ask_about_video`), and,
+once a database is confirmed for the session, `save_to_notion` — a write
+attempted before confirmation is refused by the tool itself, not by the
+prompt. Requires `X-API-Key`.
 
-The video tools (`get_video_metadata`, `get_transcript`, `summarize`,
-`ask_about_video`) and the mapper-backed write are not implemented yet; a
-confirmed `save_to_notion` call currently returns a placeholder result. See
+The mapper-backed write is not implemented yet; a confirmed `save_to_notion`
+call currently returns a placeholder result. See
 [the design spec](superpowers/specs/2026-08-17-agentic-orchestrator-design.md)
 for the full tool belt this surface is built towards.
 
@@ -163,13 +164,25 @@ for the full tool belt this surface is built towards.
 {
   "session_id": "3f9c2e7a1b4d4f6e8a0c2d5e7f9a1b3c",
   "reply": "I found a few candidates: \"Watch Later\" and \"Reading List\". Which one?",
-  "confirmed_database_id": null
+  "confirmed_database_id": null,
+  "usage": {
+    "requests": 3,
+    "input_tokens": 2140,
+    "output_tokens": 186,
+    "total_tokens": 2326,
+    "cost": null
+  }
 }
 ```
 
 `confirmed_database_id` is `null` until a `confirm_database` tool call has run in
 this session; once set, it stays set for the rest of the session unless the user
 corrects it.
+
+`usage` covers the whole turn, not just the orchestrator's own requests: when the
+turn calls `summarize` or `ask_about_video`, those tools delegate to an ephemeral
+sub-agent that shares the orchestrator's usage counter, so its requests and tokens
+are included here too. `cost` is populated only when the provider reports one.
 
 ### Errors
 
@@ -189,6 +202,105 @@ curl -X POST "http://localhost:8000/api/v1/chat" \
   -H "Content-Type: application/json" \
   -H "X-API-Key: $API_KEY" \
   -d '{"message":"find me a database to save videos to","conversation_id":"c1"}'
+```
+
+## `POST /api/v1/chat/stream`
+
+The same orchestrator turn as `POST /api/v1/chat`, streamed as it happens instead
+of returned as one JSON body. Transcribing a long video takes 30-60 seconds or
+more; without progress events a client sits on a dead spinner for the whole turn.
+Requires `X-API-Key`.
+
+### Request
+
+Identical to `POST /api/v1/chat`: `message`, `conversation_id`, optional `session_id`.
+
+```json
+{
+  "message": "summarize this video: https://www.youtube.com/watch?v=dQw4w9WgXcQ",
+  "conversation_id": "c1",
+  "session_id": null
+}
+```
+
+### Response — `text/event-stream`
+
+The response is a standard SSE stream (`Cache-Control: no-cache`), each event as
+`event: <name>\ndata: <json>\n\n`. Two events are pinned in place — `session` is
+always first, before any slow work starts, and exactly one terminal event
+(`reply` or `error`) is always last. Everything between them is forwarded from
+the underlying model run as it happens: `thinking`, `tool_call`, `tool_return`,
+and `text` events arrive in whatever order the run produces them, and for a
+turn that makes more than one tool call, these categories repeat and interleave
+rather than each occurring once — e.g. `tool_call`/`tool_return` for one tool,
+more `text` or `thinking`, then `tool_call`/`tool_return` for a second tool,
+and so on. Do not assume all `tool_call`s settle before the first `text`
+appears.
+
+- `session` — always first, before any slow work starts, so a client can record
+  the session id immediately:
+  ```json
+  { "session_id": "3f9c2e7a1b4d4f6e8a0c2d5e7f9a1b3c" }
+  ```
+- `thinking` — zero or more, streamed incrementally as the model reasons (only
+  when `AGENT_THINKING_LEVEL` enables it). Concatenate the `content` fragments in
+  order to reconstruct the full reasoning:
+  ```json
+  { "content": "The user wants a summary, so I should call summarize..." }
+  ```
+- `tool_call` — zero or more, one per tool invocation:
+  ```json
+  { "tool": "get_transcript", "args": {"url": "https://www.youtube.com/watch?v=dQw4w9WgXcQ"} }
+  ```
+- `tool_return` — one per `tool_call`, in the same order:
+  ```json
+  { "tool": "get_transcript", "content": {"url": "...", "transcript_hash": "...", "char_count": 8421, "segment_count": 96, "duration": 612.0, "language": "en", "preview": "In this video..."} }
+  ```
+- `text` — zero or more, streamed incrementally as the model writes its answer.
+  Concatenate the `content` fragments in order to render the reply as it arrives;
+  the terminal `reply` event also carries the complete text:
+  ```json
+  { "content": "Here's a summary of the video..." }
+  ```
+- Exactly one terminal event, always last — `reply` on success:
+  ```json
+  {
+    "session_id": "3f9c2e7a1b4d4f6e8a0c2d5e7f9a1b3c",
+    "reply": "Here's a summary of the video...",
+    "confirmed_database_id": null,
+    "trace": [ { "kind": "tool_call", "tool": "get_transcript", "args": {"url": "..."} }, "..." ],
+    "usage": { "requests": 5, "input_tokens": 41820, "output_tokens": 512, "total_tokens": 42332, "cost": null }
+  }
+  ```
+  or `error` on failure:
+  ```json
+  { "detail": "The chat turn failed." }
+  ```
+
+`reply` carries the same `ChatReply` shape documented under `POST /api/v1/chat`,
+including the full `trace` of the turn and the `usage` totals — for a turn that
+called `summarize`, the sub-agent's map-reduce requests are why `usage` is much
+larger here than a turn with no video tools — the streamed `tool_call`/`tool_return`/
+`text`/`thinking` events are the same steps delivered incrementally as they
+happen, not a separate record.
+
+### Mid-stream failures
+
+Once the response has started, an HTTP status code can no longer change — the
+headers are already sent. A failure during the run (a `UsageLimitExceeded`, an
+unhandled exception, or a lost write race persisting the turn) therefore arrives
+as a terminal `error` event instead of a non-200 status. Only a failure that
+happens **before** streaming begins — an unknown `session_id` — surfaces as an
+HTTP status (404), because at that point no bytes have been written yet. As with
+`POST /api/v1/chat`, a failed turn persists nothing.
+
+### Example
+
+```bash
+curl -N -X POST "http://localhost:8000/api/v1/chat/stream" \
+  -H "Content-Type: application/json" \
+  -H "X-API-Key: $API_KEY" \
+  -d '{"message":"summarize this video: https://www.youtube.com/watch?v=dQw4w9WgXcQ","conversation_id":"c1"}'
 ```
 
 ## `GET /api/v1/chat/{session_id}`

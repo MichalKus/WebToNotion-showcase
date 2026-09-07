@@ -27,7 +27,7 @@ from pydantic_ai.models.openrouter import (
 )
 from pydantic_ai.providers.openrouter import OpenRouterProvider
 
-from webtonotion.agents.capabilities import register_notion_tools
+from webtonotion.agents.capabilities import register_notion_tools, register_video_tools
 from webtonotion.agents.deps import AgentDeps
 
 if TYPE_CHECKING:
@@ -36,6 +36,17 @@ if TYPE_CHECKING:
 INSTRUCTIONS = """\
 You are the WebToNotion assistant. You help a user work with video links and save
 results into their Notion workspace over a multi-turn conversation.
+
+## Working with a video
+Use get_video_metadata for cheap questions about what a video is — it does not download
+audio. Use get_transcript when the user wants the content itself; it returns a handle,
+not the text, which is expected. summarize and ask_about_video take the same URL and
+read the transcript for you, so never ask the user to paste one in. Transcribing a long
+video takes a while; say so rather than going silent.
+
+If a video tool returns a ToolError, tell the user plainly what failed and offer an
+alternative — do not automatically retry the same call on your own. If the user
+explicitly asks you to retry or try again, honor their request and call the tool again.
 
 ## Confirm-gate discipline
 You may not write to Notion until the user has confirmed a target database in THIS
@@ -91,7 +102,9 @@ def build_orchestrator(settings: "Settings") -> Agent[AgentDeps, str]:
         model_settings=OpenRouterModelSettings(
             openrouter_reasoning=OpenRouterReasoning(effort=reasoning_effort),
         ),
+        name="orchestrator",
     )
 
     register_notion_tools(agent)
+    register_video_tools(agent)
     return agent
