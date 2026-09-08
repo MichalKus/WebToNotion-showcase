@@ -7,6 +7,7 @@ shown to preserve it. They are not aspirational: where behaviour looks
 wrong, it is pinned as-is with a comment pointing at what changes it.
 """
 
+import asyncio
 import json
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -14,9 +15,12 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from pydantic import HttpUrl
 
-from webtonotion.exceptions import VideoScrapingError
+from webtonotion.config.settings import settings
+from webtonotion.exceptions import ContentProcessingError, VideoScrapingError
+from webtonotion.models.transcript import StoredTranscript
 from webtonotion.models.video import ContentAnalysisResult, VideoContent
 from webtonotion.services.extraction.base import ExtractionData
+from webtonotion.services.storage.file_cache import FileCacheService
 from webtonotion.services.video_scraping_service import VideoScrapingService
 
 
@@ -57,9 +61,10 @@ def make_analysis_result(**overrides) -> ContentAnalysisResult:
 def make_service(tmp_path: Path) -> VideoScrapingService:
     """Construct a VideoScrapingService with every sub-service mocked out.
 
-    All four collaborators listed in the plan (YtDlpExtractor, AudioTranscriber,
-    ContentAnalyzer, FileCacheService) are patched at construction time so the
-    real constructors -- which read settings like OPENROUTER_API_KEY -- never run.
+    All four collaborators (YtDlpExtractor, AudioTranscriber, ContentAnalyzer,
+    FileCacheService) are patched at construction time so the real constructors --
+    which read settings like OPENROUTER_API_KEY -- never run. The transcript is
+    persisted inside the ``metadata`` cache artifact, so there is no separate store.
     """
     with (
         patch("webtonotion.services.video_scraping_service.FileCacheService"),
@@ -72,13 +77,18 @@ def make_service(tmp_path: Path) -> VideoScrapingService:
     service.file_cache = MagicMock()
     service.file_cache.get_cached_content = AsyncMock(return_value=None)
     service.file_cache.cache_content = AsyncMock(return_value=None)
+    service.file_cache.get_artifact = AsyncMock(return_value=None)
+    service.file_cache.put_artifact = AsyncMock(return_value=None)
+    # Each call hands back a fresh, uncontended lock -- enough for the single-caller
+    # tests here; the concurrency tests install a shared one.
+    service.file_cache.artifact_lock = MagicMock(side_effect=lambda *a, **k: asyncio.Lock())
 
     service.ytdlp_extractor = MagicMock()
     service.ytdlp_extractor.extract = AsyncMock(return_value=make_extraction_data())
     service.ytdlp_extractor.max_audio_duration = 900
 
     service.transcriber = MagicMock()
-    service.transcriber.transcribe = AsyncMock(return_value="")
+    service.transcriber.transcribe = AsyncMock(return_value=StoredTranscript(text=""))
     service.transcriber.temp_dir = tmp_path
 
     service.analyzer = MagicMock()
@@ -118,7 +128,9 @@ class TestProcessVideoHappyPath:
         audio_path.write_bytes(b"fake audio")
         extraction_data = make_extraction_data(audio_path=audio_path)
         service.ytdlp_extractor.extract = AsyncMock(return_value=extraction_data)
-        service.transcriber.transcribe = AsyncMock(return_value="hello world")
+        service.transcriber.transcribe = AsyncMock(
+            return_value=StoredTranscript(text="hello world")
+        )
         analysis = make_analysis_result(topics=["music"], sentiment="negative", locations=["Paris"])
         service.analyzer.analyze = AsyncMock(return_value=analysis)
 
@@ -202,3 +214,162 @@ class TestProcessVideoFailure:
             await service.process_video(HttpUrl("https://www.youtube.com/watch?v=abc123"))
 
         assert exc_info.value.__cause__ is original_error
+
+
+class TestPipelineStages:
+    """The stages tools call directly, each cached the moment it succeeds."""
+
+    @pytest.mark.asyncio
+    async def test_fetch_metadata_does_not_pull_audio(self, tmp_path):
+        service = make_service(tmp_path)
+
+        await service.fetch_metadata("https://www.example.com/watch?v=abc123")
+
+        assert service.ytdlp_extractor.extract.call_args.kwargs["download_audio"] is False
+
+    @pytest.mark.asyncio
+    async def test_fetch_metadata_serves_a_cached_artifact_without_calling_ytdlp(self, tmp_path):
+        service = make_service(tmp_path)
+        cached = make_extraction_data(title="From Cache")
+        service.file_cache.get_artifact = AsyncMock(return_value=cached.model_dump(mode="json"))
+
+        result = await service.fetch_metadata("https://www.example.com/watch?v=abc123")
+
+        assert result.title == "From Cache"
+        service.ytdlp_extractor.extract.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_fetch_transcript_stores_into_the_metadata_artifact(self, tmp_path):
+        service = make_service(tmp_path)
+        audio_path = tmp_path / "abc123.mp3"
+        audio_path.write_bytes(b"fake audio")
+        service.ytdlp_extractor.extract = AsyncMock(
+            return_value=make_extraction_data(audio_path=audio_path)
+        )
+        service.transcriber.transcribe = AsyncMock(
+            return_value=StoredTranscript(text="hello world")
+        )
+
+        result = await service.fetch_transcript("https://www.example.com/watch?v=abc123")
+
+        assert result.text == "hello world"
+        service.file_cache.put_artifact.assert_awaited_once()
+        url_arg, artifact_arg, data_arg = service.file_cache.put_artifact.call_args.args
+        assert artifact_arg == "metadata"
+        assert data_arg["transcript"]["text"] == "hello world"
+        assert data_arg["title"] == "Test Video"
+
+    @pytest.mark.asyncio
+    async def test_fetch_transcript_reuses_a_transcript_from_metadata(self, tmp_path):
+        service = make_service(tmp_path)
+        service.file_cache.get_artifact = AsyncMock(
+            return_value={"title": "T", "transcript": {"text": "already stored", "segments": []}}
+        )
+
+        result = await service.fetch_transcript("https://www.example.com/watch?v=abc123")
+
+        assert result.text == "already stored"
+        service.transcriber.transcribe.assert_not_called()
+        service.ytdlp_extractor.extract.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_transcript_survives_a_failed_analysis(self, tmp_path):
+        """The cache-granularity regression the spec calls out: an expensive
+        transcript must not be discarded because a later, cheaper stage failed."""
+        service = make_service(tmp_path)
+        audio_path = tmp_path / "abc123.mp3"
+        audio_path.write_bytes(b"fake audio")
+        service.ytdlp_extractor.extract = AsyncMock(
+            return_value=make_extraction_data(audio_path=audio_path)
+        )
+        service.transcriber.transcribe = AsyncMock(
+            return_value=StoredTranscript(text="expensive text")
+        )
+        service.analyzer.analyze = AsyncMock(side_effect=ContentProcessingError("analysis down"))
+
+        with pytest.raises(VideoScrapingError):
+            await service.process_video(HttpUrl("https://www.youtube.com/watch?v=abc123"))
+
+        metadata_writes = [
+            call.args
+            for call in service.file_cache.put_artifact.await_args_list
+            if call.args[1] == "metadata"
+        ]
+        assert metadata_writes
+        assert metadata_writes[-1][2]["transcript"]["text"] == "expensive text"
+
+    @pytest.mark.asyncio
+    async def test_write_metadata_merged_never_lets_none_clobber_an_existing_value(self, tmp_path):
+        service = make_service(tmp_path)
+        service.file_cache.get_artifact = AsyncMock(
+            return_value={"transcript": {"text": "keep me", "segments": []}, "summaries": {}}
+        )
+
+        await service._write_metadata_merged(
+            "https://www.example.com/watch?v=x", {"title": "New Title", "transcript": None}
+        )
+
+        saved = service.file_cache.put_artifact.call_args.args[2]
+        assert saved["transcript"] == {"text": "keep me", "segments": []}
+        assert saved["title"] == "New Title"
+
+
+def _real_cache(tmp_path) -> FileCacheService:
+    with (
+        patch.object(settings, "cache_dir", str(tmp_path)),
+        patch.object(settings, "enable_caching", True),
+    ):
+        cache = FileCacheService()
+    FileCacheService._artifact_locks.clear()
+    return cache
+
+
+class TestMetadataArtifactConcurrency:
+    """Cross-session read-modify-write of the shared 'metadata' artifact, over the
+    real FileCacheService (real per-key lock, real atomic write)."""
+
+    @pytest.mark.asyncio
+    async def test_two_concurrent_fetch_transcript_calls_transcribe_once(self, tmp_path):
+        service = make_service(tmp_path)
+        service.file_cache = _real_cache(tmp_path)
+        audio_path = tmp_path / "abc.mp3"
+        audio_path.write_bytes(b"fake audio")
+        service.ytdlp_extractor.extract = AsyncMock(
+            return_value=make_extraction_data(audio_path=audio_path)
+        )
+
+        calls = 0
+
+        async def slow_transcribe(_path):
+            nonlocal calls
+            calls += 1
+            await asyncio.sleep(0.05)
+            return StoredTranscript(text="the body")
+
+        service.transcriber.transcribe = AsyncMock(side_effect=slow_transcribe)
+
+        url = "https://www.example.com/watch?v=race"
+        r1, r2 = await asyncio.gather(service.fetch_transcript(url), service.fetch_transcript(url))
+
+        assert calls == 1
+        assert r1.text == r2.text == "the body"
+
+    @pytest.mark.asyncio
+    async def test_two_concurrent_store_summary_calls_keep_both_variants(self, tmp_path):
+        service = make_service(tmp_path)
+        service.file_cache = _real_cache(tmp_path)
+        url = "https://www.example.com/watch?v=sum"
+        await service.file_cache.put_artifact(
+            url,
+            "metadata",
+            {"title": "T", "transcript": {"text": "b", "segments": []}, "summaries": {}},
+        )
+
+        await asyncio.gather(
+            service.store_summary(url, "concise:medium", "S1"),
+            service.store_summary(url, "bullet points:short", "S2"),
+        )
+
+        meta = await service.file_cache.get_artifact(url, "metadata")
+        assert meta["summaries"] == {"concise:medium": "S1", "bullet points:short": "S2"}
+        assert meta["transcript"]["text"] == "b"

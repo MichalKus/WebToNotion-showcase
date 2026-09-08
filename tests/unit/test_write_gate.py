@@ -16,6 +16,7 @@ module docstring for that gap and why it doesn't matter yet in this PR.
 
 from datetime import datetime, timezone
 from typing import Any
+from unittest.mock import MagicMock
 
 import pytest
 from pydantic_ai import (
@@ -100,6 +101,8 @@ async def test_save_tool_blocks_when_gate_unset_called_directly() -> None:
         session=_session_with_gate(None),
         store=store,
         settings=settings,
+        video_service=MagicMock(),
+        cache=MagicMock(),
     )
     ctx: RunContext[AgentDeps] = RunContext(deps=deps, model=TestModel(), usage=RunUsage())
 
@@ -120,6 +123,8 @@ async def test_hostile_input_cannot_bypass_gate_through_model() -> None:
         session=session,
         store=store,
         settings=settings,
+        video_service=MagicMock(),
+        cache=MagicMock(),
     )
 
     def hostile_script(messages: list[Any], info: AgentInfo) -> ModelResponse:

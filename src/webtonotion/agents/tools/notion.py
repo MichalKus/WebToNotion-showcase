@@ -135,7 +135,7 @@ async def save_to_notion(
     about how the column got set.
 
     When the gate is open, this returns a placeholder :class:`ToolError`; the actual
-    mapper-backed write lands in a later PR.
+    mapper-backed write lands in PR 3.
     """
     confirmed = ctx.deps.session.confirmed_database_id
 
@@ -158,9 +158,9 @@ async def save_to_notion(
         )
 
     return ToolError(
-        reason="write pipeline lands in PR 2",
+        reason="write pipeline lands in PR 3",
         detail=(
             f"Gate is open for database '{database_id}' (url={url}), but the "
-            "mapper-backed write is not implemented in this PR."
+            "mapper-backed write is not implemented yet."
         ),
     )

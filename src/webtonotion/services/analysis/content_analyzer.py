@@ -8,6 +8,7 @@ from pydantic_ai.providers.openrouter import OpenRouterProvider
 
 from webtonotion.config.logging import LoggerMixin
 from webtonotion.config.settings import settings
+from webtonotion.exceptions import ContentProcessingError
 from webtonotion.models.video import ContentAnalysisResult
 
 
@@ -57,7 +58,13 @@ class ContentAnalyzer(LoggerMixin):
         """
 
     async def analyze(self, info: Dict[str, Any], transcript: str) -> ContentAnalysisResult:
-        """Analyze video content using AI with structured output."""
+        """Analyze video content using AI with structured output.
+
+        Raises:
+            ContentProcessingError: If the analysis run fails for any reason. Callers
+                get a typed failure rather than an empty result they would mistake for
+                a genuine "this video is about nothing" answer.
+        """
         try:
             # Prepare structured content for analysis
             content_data = {
@@ -83,9 +90,6 @@ class ContentAnalyzer(LoggerMixin):
                 Provide a comprehensive analysis with structured output.
             """
 
-            # it was:
-            # analysis_agent = self.analysis_agent
-            # result = await analysis_agent.run(analysis_prompt)
             result = await self.analysis_agent.run(analysis_prompt)
 
             self.logger.info(f"Analysis result: {result.output}")
@@ -95,26 +99,24 @@ class ContentAnalyzer(LoggerMixin):
             error_msg = str(e)
             self.logger.error(f"Content analysis failed with OpenRouter: {error_msg}")
 
-            # Handle specific OpenRouter errors
+            # Classify the common OpenRouter failures for the operator's benefit; the
+            # caller sees a typed failure either way.
             if any(
                 keyword in error_msg.lower()
                 for keyword in ["quota", "rate limit", "insufficient_quota", "429"]
             ):
                 self.logger.warning(
-                    "OpenRouter quota or rate limit exceeded. Consider upgrading your plan or switching models."
+                    "OpenRouter quota or rate limit exceeded. Consider upgrading your plan "
+                    "or switching models."
                 )
             elif any(
                 keyword in error_msg.lower() for keyword in ["authentication", "api key", "401"]
             ):
                 self.logger.error(
-                    "Authentication failed for OpenRouter. Please check your API key configuration."
+                    "Authentication failed for OpenRouter. Please check your API key "
+                    "configuration."
                 )
 
-            # Return default structured result on failure
-            return ContentAnalysisResult(
-                topics=[],
-                sentiment="neutral",
-                locations=[],
-                key_insights=[],
-                content_category="general",
-            )
+            # Never return a plausible-looking empty result: an agent would believe it
+            # and tell the user their video is about nothing.
+            raise ContentProcessingError(f"Content analysis failed: {error_msg}") from e

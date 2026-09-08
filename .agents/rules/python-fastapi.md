@@ -81,10 +81,7 @@ mypy src/
 pytest                       # asyncio_mode = auto; no @pytest.mark.asyncio needed
 ```
 
-After implementing a feature or fix, run **only `pytest`** to verify the change. Do not run
-`black`, `isort`, `flake8`, or `mypy` unless the user explicitly asks for it — save them for
-the pre-PR checklist in [pull-requests.md](pull-requests.md), or whenever specifically
-requested.
+Run `pytest` to verify changes **only** after actively implementing or refactoring Python code in `src/`, or when the user explicitly requests it. Do not run tests for documentation, session summaries, or speculative checks. Do not run `black`, `isort`, `flake8`, or `mypy` unless the user explicitly asks for it — save them for the pre-PR checklist in [pull-requests.md](pull-requests.md), or whenever specifically requested.
 
 CI (`code-quality.yml`) currently enforces **only** `black --check` and `isort --check-only`.
 flake8 and mypy are not wired in yet, so a green CI run does not mean the types are clean —

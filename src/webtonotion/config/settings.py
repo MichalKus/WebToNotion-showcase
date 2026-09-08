@@ -91,9 +91,26 @@ class Settings(BaseSettings):
 
     # Agentic Orchestrator Configuration
     agent_max_requests: int = Field(
-        default=15,
-        description="Maximum model requests per orchestrator run (runaway-loop bound)",
+        default=60,
+        description=(
+            "Maximum model requests across an entire chat turn, including sub-agent runs "
+            "(summarize/ask_about_video delegate to their own agent.run calls sharing this "
+            "budget). Worst case is map-reduce summarization: "
+            "summary_map_reduce_threshold_chars / summary_map_reduce_window_chars + 1 requests, "
+            "plus the orchestrator's own turns. This is a runaway-loop bound, not a cost bound "
+            "-- see agent_max_total_tokens for that."
+        ),
         ge=1,
+    )
+
+    agent_max_total_tokens: int = Field(
+        default=500_000,
+        description=(
+            "Maximum total tokens (input+output, orchestrator plus sub-agent runs) across "
+            "one chat turn. This is the real cost guard once sub-agents share the turn's "
+            "usage budget. 0 disables the limit."
+        ),
+        ge=0,
     )
 
     agent_thinking_level: Literal["off", "minimal", "low", "medium", "high", "xhigh"] = Field(
@@ -107,6 +124,43 @@ class Settings(BaseSettings):
     session_db_path: str = Field(
         default="./cache/sessions.db",
         description="SQLite path for chat session and message-history storage",
+    )
+
+    transcript_ttl: int = Field(
+        default=60 * 60 * 24 * 30,  # 30 days
+        description=(
+            "Retention in seconds for the 'metadata' cache artifact, which carries the "
+            "video's transcript and cached summaries. The transcript is effectively "
+            "immutable and re-running Whisper is expensive, so this is a disk sweep "
+            "rather than a correctness bound (0 = never expire)."
+        ),
+        ge=0,
+    )
+
+    transcript_preview_chars: int = Field(
+        default=500,
+        description="Characters of transcript surfaced in a TranscriptRef preview",
+        ge=0,
+    )
+
+    summary_map_reduce_threshold_chars: int = Field(
+        default=120_000,
+        description=(
+            "Transcript length above which summarization switches to map-reduce. Bounds "
+            "cost regardless of the model's context limit."
+        ),
+        ge=1000,
+    )
+
+    summary_map_reduce_window_chars: int = Field(
+        default=20_000,
+        description="Window size in characters for each map step of a map-reduce summary",
+        ge=1000,
+    )
+
+    prompt_cache_ttl: Literal["5m", "1h"] = Field(
+        default="1h",
+        description="TTL for the provider prompt-cache breakpoint placed after the transcript",
     )
 
     # Logging Configuration

@@ -79,8 +79,15 @@ class YtDlpExtractor(VideoExtractor, LoggerMixin):
         except (ValueError, TypeError):
             return None
 
-    async def extract(self, url: str) -> ExtractionData:
-        """Extract video content using yt-dlp."""
+    async def extract(self, url: str, download_audio: bool = True) -> ExtractionData:
+        """Extract video content using yt-dlp.
+
+        Args:
+            url: The video URL to process.
+            download_audio: Whether to pull the audio track. ``False`` returns metadata
+                only, which is what the ``get_video_metadata`` tool needs — downloading
+                audio to answer "what is this video?" would cost a download for nothing.
+        """
         self.logger.info(f"Extracting video metadata with use of yt-dlp")
 
         try:
@@ -104,14 +111,14 @@ class YtDlpExtractor(VideoExtractor, LoggerMixin):
             duration = info.get("duration") or 0
             audio_path = None
 
-            # Check duration limit
-            if duration and duration > self.max_audio_duration:
+            if not download_audio:
+                self.logger.info("Metadata-only extraction requested; skipping audio download")
+            elif duration and duration > self.max_audio_duration:
                 self.logger.warning(
                     f"Video duration ({duration}s) exceeds limit ({self.max_audio_duration}s)"
                 )
-                # We will return result without audio path, orchestrator will handle skipping transcription
+                # Return without an audio path; the caller decides how to report the skip.
             else:
-                # Download audio
                 download_result = await self._download_audio(url, info)
                 if download_result:
                     audio_path, _ = download_result

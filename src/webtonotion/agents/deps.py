@@ -18,6 +18,8 @@ from webtonotion.agents.session.store import Session, SessionStore
 if TYPE_CHECKING:  # heavy / optional imports kept out of runtime import graph
     from webtonotion.config.settings import Settings
     from webtonotion.services.notion_service import NotionService
+    from webtonotion.services.storage.file_cache import FileCacheService
+    from webtonotion.services.video_scraping_service import VideoScrapingService
 
 
 @dataclass(frozen=True)
@@ -30,9 +32,16 @@ class AgentDeps:
             write gate the ``save_to_notion`` tool checks.
         store: Session store used to persist a confirmed database id.
         settings: Application settings (model, retries, limits).
+        video_service: Pipeline stages the video tools call (metadata, transcript,
+            analysis), each independently cached.
+        cache: Per-artifact cache. The ``metadata`` artifact holds the video's
+            transcript and its cached summaries alongside title/author, so a repeated
+            request -- for a transcript ref, a summary, or an answer -- costs nothing.
     """
 
     notion_service: "NotionService"
     session: Session
     store: SessionStore
     settings: "Settings"
+    video_service: "VideoScrapingService"
+    cache: "FileCacheService"

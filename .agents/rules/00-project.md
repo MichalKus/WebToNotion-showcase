@@ -35,3 +35,18 @@ SQLAlchemy, Alembic, Poetry, Ruff, Celery, Redis, or a frontend.
 - `.agents/workflows/architecture-plan.md` — on-demand: plan a feature's architecture.
 - `docs/` — published documentation of current behaviour; the guides listed in `CLAUDE.md`.
 - `.workbench/` — gitignored local scratch: plans, reviews, research, runbooks. Never `docs/`.
+
+## Test Execution Discipline
+
+Do not run tests indiscriminately. Tests take 20-30s and must only run when genuinely needed.
+
+- **Run `pytest` ONLY when:**
+  - The agent has just implemented or refactored code in `src/webtonotion/` and needs to verify correctness.
+  - The user explicitly requests running tests (e.g. "odpal testy", "run pytest").
+  - Preparing the final pre-PR checklist.
+- **NEVER run tests during:**
+  - Documentation, notes, or plans (`.md` files, `docs/`, `.workbench/`).
+  - Session summarization (`/summarize` — strictly inspect git facts, do not run test suites).
+  - Q&A, conceptual discussions, or architectural analysis.
+  - Spontaneous reactions to user edits in the IDE — do not proactively run tests just because the user touched a file in the editor.
+  - When the user explicitly instructs to skip tests.

@@ -18,6 +18,7 @@ if TYPE_CHECKING:
     from webtonotion.agents.deps import AgentDeps
     from webtonotion.agents.session.store import SessionStore
     from webtonotion.services.notion_service import NotionService
+    from webtonotion.services.storage.file_cache import FileCacheService
     from webtonotion.services.video_scraping_service import VideoScrapingService
 
 logger = logging.getLogger(__name__)
@@ -59,8 +60,20 @@ def get_notion_service(
     return NotionService(settings=app_settings)
 
 
+@lru_cache
+def get_file_cache() -> "FileCacheService":
+    """Get the process-wide per-artifact cache singleton.
+
+    Returns:
+        FileCacheService: The file-backed artifact cache.
+    """
+    from webtonotion.services.storage.file_cache import FileCacheService
+
+    return FileCacheService()
+
+
 def get_video_scraping_service() -> VideoScrapingService:
-    """Get VideoScrapingService instance.
+    """Get a VideoScrapingService instance.
 
     Returns:
         VideoScrapingService: Configured VideoScrapingService instance
@@ -111,21 +124,22 @@ def get_orchestrator() -> "Agent[AgentDeps, str]":
 def get_chat_service(
     app_settings: Annotated[Settings, Depends(get_settings)],
     notion_service: Annotated[Any, Depends(get_notion_service)],
+    video_service: Annotated[Any, Depends(get_video_scraping_service)],
 ) -> "ChatService":
-    """Get a ChatService wired with the singleton store and orchestrator.
+    """Get a ChatService wired with the singleton store, orchestrator, and caches.
 
-    The store and agent are process-wide singletons; only the thin service wrapper
-    (and its per-request NotionService) is constructed here.
+    The store, agent, and artifact cache are process-wide singletons; only the thin
+    service wrapper and its per-request clients are constructed here.
 
     Args:
         app_settings: Application settings injected by FastAPI.
         notion_service: Per-request Notion API client. Typed ``Any`` here (not
-            ``NotionService``) because that type only exists under
-            ``TYPE_CHECKING`` in this module — with ``from __future__ import
-            annotations`` active, FastAPI resolves every parameter annotation
-            when it walks the dependency tree to build ``/openapi.json``, and a
-            genuinely undefined name breaks that walk even though the request
-            path itself never needed it.
+            ``NotionService``) because that type only exists under ``TYPE_CHECKING`` in
+            this module — with ``from __future__ import annotations`` active, FastAPI
+            resolves every parameter annotation when it walks the dependency tree to
+            build ``/openapi.json``, and a genuinely undefined name breaks that walk
+            even though the request path itself never needed it.
+        video_service: Per-request video pipeline, typed ``Any`` for the same reason.
 
     Returns:
         ChatService: Ready to handle one chat turn.
@@ -137,6 +151,8 @@ def get_chat_service(
         store=get_session_store(),
         notion_service=notion_service,
         settings=app_settings,
+        video_service=video_service,
+        cache=get_file_cache(),
     )
 
 
