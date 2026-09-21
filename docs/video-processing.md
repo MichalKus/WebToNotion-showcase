@@ -1,12 +1,17 @@
 # Video Processing
 
-How `VideoScrapingService.process_video` turns a URL into a `VideoContent`.
+How `VideoScrapingService` turns a URL into the material a Notion page is built from.
 
 ```
-URL → cache lookup → yt-dlp extract → Groq transcribe → OpenRouter analyse → cache write
+URL → cache lookup → yt-dlp extract (metadata) → Groq transcribe (audio) → cache write
 ```
 
-Every step after the cache lookup is skipped on a cache hit.
+There is no separate analysis stage. `VideoScrapingService` exposes independently callable,
+independently cached steps — `is_video_url`, `fetch_metadata`, `fetch_transcript`,
+`store_summary` — and both `agents/writer.py` (behind `POST /api/v1/process/url`) and the
+chat orchestrator's video tools call those steps directly. Summaries are produced **on
+demand** by a chat sub-agent and cached, never by this service. Every step after the cache
+lookup is skipped on a cache hit.
 
 ## Supported platforms
 
@@ -38,10 +43,12 @@ yt-dlp itself supports far more sites than this list; the list is the deliberate
   ```
 
 - **`WHISPER_API_KEY`** — a Groq API key
-- **`OPENROUTER_API_KEY`** — used by both AI agents
+- **`OPENROUTER_API_KEY`** — used by the Notion mapper agent and the chat orchestrator /
+  sub-agents
 
-`ContentAnalyzer` and the Notion mapper agent raise `ValueError` at import time if
-`OPENROUTER_API_KEY` is missing, so the app will not start without it.
+Agents are built lazily by `build_*(settings)` factories, not at module import, so a missing
+`OPENROUTER_API_KEY` no longer breaks startup or test collection — it fails the first agent
+run instead.
 
 ## Extraction (yt-dlp)
 
@@ -66,9 +73,8 @@ Notable yt-dlp options (`ytdlp_extractor.py`):
 ### Duration limit
 
 If `duration > MAX_VIDEO_DURATION`, the audio download is **skipped entirely**. Extraction
-still succeeds — you get metadata, no transcript, and `skipped_transcription:
-"duration_exceeded"` in `VideoContent.metadata`. Analysis then runs on title and
-description alone.
+still succeeds — you get metadata and no transcript. The Notion mapper then works from the
+title and description alone.
 
 ### Audio normalisation
 
@@ -91,85 +97,65 @@ load-bearing part, timestamps are an enhancement.
 When `CLEANUP_TEMP_FILES=true`, the audio file is deleted afterwards — on both success and
 failure — but only if it sits directly in `TEMP_DIR`.
 
-What happens to a transcription failure depends on the caller:
+`VideoScrapingService.fetch_transcript` always lets a transcription failure propagate as
+`VideoScrapingError`. What happens next depends on the caller:
 
-- `VideoScrapingService.fetch_transcript` (used by the chat orchestrator's video
-  tools) lets it propagate as `VideoScrapingError` — there is no page to build a
-  degraded version of in a chat turn, so the tool reports the failure and the
-  agent explains it to the user.
-- `VideoScrapingService.process_video` (the fixed `/process/url` pipeline) still
-  logs and swallows it, continuing with an empty transcript, exactly as before
-  this PR.
+- The chat orchestrator's video tools (`get_transcript`, `summarize`, `ask_about_video`)
+  turn it into a `ToolError` — there is no page to build a degraded version of in a chat
+  turn, so the agent explains the failure to the user.
+- `agents/writer.build_page_content` (behind `POST /api/v1/process/url`) calls
+  `fetch_transcript` tolerantly: a no-audio / transcription `VideoScrapingError` is logged
+  and yields an empty `transcript_excerpt`, and the page is still built from metadata. A
+  `fetch_metadata` failure, by contrast, propagates and fails the request with 422.
 
-## Analysis (OpenRouter + PydanticAI)
+## No analysis stage
 
-`ContentAnalyzer` runs a PydanticAI `Agent` with `output_type=ContentAnalysisResult`, so
-the model must return a structurally valid object or PydanticAI retries (`MAX_RETRIES`).
+There is no `ContentAnalyzer`. The `topics` / `sentiment` / `locations` / `key_insights`
+extraction pass was removed in the single-write-path refactor and **not** backfilled. The
+Notion mapper agent (`services/analysis/notion_mapper.py`) now infers a database's
+properties directly from the title, description, transcript excerpt, and any cached summary
+that `agents/writer.build_page_content` assembles into a `VideoPageContent` — see
+[notion-integration.md](notion-integration.md).
 
-```python
-class ContentAnalysisResult(BaseModel):
-    topics: list[str]          # 1–10 entries
-    sentiment: str             # "positive" | "negative" | "neutral"
-    locations: list[str]       # up to 20
-    key_insights: list[str]    # up to 10
-    content_category: str      # default "general"
-```
+## The pipeline stages
 
-The prompt is truncated before sending: description to 1000 characters, transcript to
-2000. Long videos are therefore analysed on their opening minutes, not their full text.
+`VideoScrapingService` exposes independently callable, independently cached steps rather
+than one monolithic `process_video`:
 
-On any failure the analyser raises `ContentProcessingError` — it no longer returns an
-empty, `sentiment="neutral"` result. A silent empty result is indistinguishable from a
-genuine "this video has no discernible topics" answer, and an agent (or a person) reading
-it downstream would believe it; a typed failure is not mistakeable for a real analysis.
-Quota, rate-limit, and authentication errors are still detected and logged with a specific
-hint before the exception is raised.
-
-`key_insights` and `content_category` are folded into `VideoContent.metadata`, with
-`key_insights` stored as a JSON-encoded string.
-
-## The three pipeline stages
-
-`VideoScrapingService` exposes three independently callable, independently cached
-stages, rather than one monolithic `process_video`:
-
-| Stage | Method | Downloads audio? | Cached artifact |
+| Step | Method | Downloads audio? | Cached artifact |
 |---|---|---|---|
+| Video-URL check | `is_video_url` | no | — |
 | Metadata | `fetch_metadata` | no | `metadata` |
 | Transcript | `fetch_transcript` | yes | `metadata` (under the `transcript` key) |
-| Analysis | `analyze_content` | no (reuses the transcript) | `analysis` |
+| Summary store | `store_summary` | no | `metadata` (under `summaries`) |
 
-The chat orchestrator's video tools call these directly and one at a time —
-answering "what is this video?" must not trigger an audio download and a Whisper
-call it doesn't need. `process_video` still exists and still composes all three
-into one `VideoContent` for the fixed `/process/url` endpoint, unchanged.
+Both the chat orchestrator's video tools and `agents/writer.build_page_content` call these
+directly and one at a time — answering "what is this video?" must not trigger an audio
+download and a Whisper call it doesn't need. There is no `process_video` and no
+`analyze_content`.
 
-Caching each stage the moment it succeeds, rather than only the final assembled
-blob, is what makes a failure cheap: before this decomposition, an analysis
-failure discarded an already-completed Whisper transcription along with it,
-because nothing was written to disk until the whole pipeline finished. Now
-`fetch_transcript` persists the transcript into the `metadata` artifact before
-analysis ever runs, so a flaky OpenRouter call costs a re-run of `analyze_content`
-alone, never a second transcription.
+Caching each step the moment it succeeds, rather than only a final assembled blob, is what
+makes a failure cheap: `fetch_transcript` persists the transcript into the `metadata`
+artifact before anything downstream runs, so a flaky mapper call never costs a second
+transcription.
 
 ## Caching
 
 `FileCacheService` keys cache entries `(url_hash, artifact)` rather than one
 whole-`VideoContent` blob, written to
-`CACHE_DIR/{md5(url)}.{artifact}.json`. `artifact` is one of `metadata`, `analysis`,
-or `content` (the legacy whole-blob entry `process_video` still writes and reads for
-the fixed pipeline).
+`CACHE_DIR/{md5(url)}.{artifact}.json`. With the pipelines collapsed into one write path,
+`metadata` is the only artifact still written — the legacy whole-blob `content` entry went
+away with `process_video`, and nothing produces an `analysis` artifact now that
+`analyze_content` / `ContentAnalyzer` are gone.
 
 The `metadata` artifact is the single file that holds everything durable about a
 video — its title/author, its generated `summaries` keyed by `(style, length)`, and
 its full `transcript` (text plus timestamped segments) once transcribed.
 
 - Enabled by `ENABLE_CACHING` (default true)
-- **Per-artifact TTL.** `analysis` and `content` expire on `CACHE_EXPIRATION`
-  (default 1 day) because a prompt or model change should invalidate them. The
-  `metadata` artifact expires on `TRANSCRIPT_TTL` (default 30 days) instead: none of
-  what it holds goes stale, and re-running Whisper is the most expensive operation in
-  the system. `0` means never expire, for either.
+- The `metadata` artifact expires on `TRANSCRIPT_TTL` (default 30 days): none of what it
+  holds goes stale, and re-running Whisper is the most expensive operation in the system.
+  `0` means never expire.
 - Expiry is checked against the file's mtime at read time — stale files are ignored but not
   deleted, so the cache directory grows until cleaned manually
 - Cache read and write failures are logged as warnings and never fail the request
@@ -265,25 +251,24 @@ bill.
 
 ## Failure behaviour
 
-For the fixed `process_video` pipeline behind `/process/url`:
+For `POST /api/v1/process/url` (via `agents/writer.py`):
 
 | Step | On failure |
 |---|---|
 | Cache read | Warn, treat as miss |
-| yt-dlp extraction | **Aborts** — wrapped in `VideoScrapingError` → HTTP 422 |
-| Transcription | Warn, continue with empty transcript |
-| Analysis | **Aborts** — `ContentProcessingError`, wrapped in `VideoScrapingError` → HTTP 422 |
+| yt-dlp metadata (`fetch_metadata`) | **Aborts** — `VideoScrapingError` → HTTP 422 |
+| Transcription (`fetch_transcript`) | Logged and swallowed — the page is built with an empty transcript excerpt |
+| Notion mapper agent | **Aborts** — `ContentProcessingError` → HTTP 500 |
+| Notion `create_page` | **Aborts** — `NotionAuthenticationError` → 401, `NotionAPIError` → 503 |
 | Cache write | Warn, continue |
 
-Extraction and analysis are hard failures; transcription is the only step that
-still degrades gracefully in this pipeline.
+Metadata extraction and the mapper are hard failures; transcription is the only step that
+degrades gracefully.
 
-The chat orchestrator's video tools behave differently: `fetch_transcript` also
-aborts on a transcription failure (there is no page to degrade into a thinner
-version of mid-conversation), but the tool layer catches it — along with
-`ContentProcessingError` — and turns it into a `ToolError` the agent can see and
-explain, rather than letting it surface as a 500. See
-[Video tools](#video-tools) above.
+The chat orchestrator's video tools behave differently: `fetch_transcript` still aborts on a
+transcription failure (there is no page to degrade mid-conversation), but the tool layer
+catches it — along with `ContentProcessingError` — and turns it into a `ToolError` the agent
+can explain, rather than letting it surface as a 500. See [Video tools](#video-tools) above.
 
 There is **no Playwright fallback**. `PlaywrightFallbackError` and `PlaywrightError` exist
 in `exceptions.py` and some docstrings still mention a fallback, but no such code path is
@@ -308,17 +293,19 @@ extraction fails and every video processes without a transcript.
 **Video is private or unavailable** — set `COOKIES_FILE_PATH` to a Netscape-format
 cookies file. Instagram, Facebook, and TikTok frequently require this from datacenter IPs.
 
-**No transcript on a long video** — check for `skipped_transcription` in the response
-metadata, then raise `MAX_VIDEO_DURATION`.
+**No transcript on a long video** — a video longer than `MAX_VIDEO_DURATION` skips the audio
+download entirely (`transcript_length: 0`, `transcription_available: false` in the
+response). Raise `MAX_VIDEO_DURATION` if you need the transcript.
 
-**`/process/url` returns 422 with "Content analysis failed"** — `ContentAnalyzer`
-raised `ContentProcessingError`. Check the logs for an OpenRouter quota, rate-limit,
-or authentication error; the analyser no longer degrades to an empty result.
+**`/process/url` returns 500 with "Notion mapping failed"** — the Notion mapper agent
+raised `ContentProcessingError` (a model error or retry exhaustion). Check the logs for an
+OpenRouter quota, rate-limit, or authentication error. This was a misleading 503 before the
+write moved onto the shared path.
 
 **A follow-up question about a video re-transcribes it** — check `TRANSCRIPT_TTL`;
 the `metadata` artifact that carries the transcript may have expired, or the tool
 may be receiving a different URL (the cache keys on an exact MD5 of the URL string,
 so a trailing tracking parameter counts as a different video).
 
-**`OpenRouter API key is required`** at startup — set `OPENROUTER_API_KEY`; both agents
-construct at import time.
+**`OpenRouter API key is required`** on the first agent run — set `OPENROUTER_API_KEY`.
+Agents are built lazily now, so a missing key surfaces at run time rather than at import.

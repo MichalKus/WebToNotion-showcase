@@ -138,7 +138,7 @@ Validated by `generate_env.py` — a missing one fails the deploy before anythin
 | Secret | Purpose |
 |---|---|
 | `NOTION_API_KEY` | Notion integration token |
-| `OPENROUTER_API_KEY` | Both AI agents |
+| `OPENROUTER_API_KEY` | Notion mapper, orchestrator, and sub-agents |
 | `WHISPER_API_KEY` | Groq transcription |
 | `API_KEY` | Value clients send as `X-API-Key` |
 | `LOGFIRE_TOKEN` | Observability |

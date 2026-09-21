@@ -14,8 +14,6 @@ from notion_client.errors import APIResponseError, HTTPResponseError, RequestTim
 from webtonotion.config.settings import Settings
 from webtonotion.exceptions import NotionAPIError, NotionAuthenticationError, NotionRateLimitError
 from webtonotion.models.notion import NotionDatabase, NotionPage, NotionPageResponse
-from webtonotion.models.video import VideoContent
-from webtonotion.services.analysis.notion_mapper import MapperDependencies, notion_mapper_agent
 from webtonotion.utils.rate_limiter import RateLimiter
 
 logger = logging.getLogger(__name__)
@@ -259,62 +257,6 @@ class NotionService:
 
         except Exception as e:
             logger.error(f"Failed to create page in database {database_id}: {e}")
-            await self._handle_api_error(e)
-
-    async def create_video_page(
-        self,
-        database_id: str,
-        video_content: VideoContent,
-        db_schema: Optional[Dict[str, Any]] = None,
-    ) -> NotionPageResponse:
-        """Create a new page with video content in the specified database."""
-        try:
-            if db_schema is None:
-                db_schema = await self.get_database_properties(database_id)
-
-            logger.info(f"Schema properties: {list(db_schema.keys())}")
-
-            deps = MapperDependencies(schema=db_schema, database_id=database_id)
-
-            logger.info(f"Invoking NotionMapperAgent for database {database_id}")
-
-            # Create a descriptive prompt for the agent based on video content
-            prompt = f"""Map this video content to the Notion database schema:
-                Video Title: {video_content.title}
-                Video Author: {video_content.author}
-                Video URL: {video_content.url}
-                Video Description: {video_content.description}
-                Video Duration: {video_content.duration} seconds
-                Published At: {video_content.published_at}
-                Transcript: {video_content.transcript[:500]}...  # First 500 chars of transcript
-                Topics: {', '.join(video_content.topics)}
-                Sentiment: {video_content.sentiment}
-                Locations: {', '.join(video_content.locations) if video_content.locations else 'None'}
-                Metadata: {video_content.metadata}
-
-            Please analyze this video content and create a Notion page payload that maps all relevant information to the provided database schema."""
-
-            result = await notion_mapper_agent.run(prompt, deps=deps)
-            page_payload = result.output
-            logger.debug(f"Agent payload: {page_payload}")
-
-            # Extract properties and children from the payload
-            # Filter out empty property values (e.g. properties that serialized to {})
-            # This is crucial because Pydantic's exclude_none=True can leave empty dicts
-            # for optional fields like 'select', 'date', etc., which Notion rejects.
-            properties = {
-                k: v for k, v in page_payload.properties.items() if v  # Keep only non-empty values
-            }
-
-            logger.info(f"Successfully parsed page data for notion page creation")
-            return await self.create_page(
-                database_id=database_id,
-                properties=properties,
-                children=page_payload.children,
-            )
-
-        except Exception as e:
-            logger.error(f"Failed to create video page via AI Agent: {e}")
             await self._handle_api_error(e)
 
     async def get_database_properties(self, database_id: str) -> Dict[str, Any]:

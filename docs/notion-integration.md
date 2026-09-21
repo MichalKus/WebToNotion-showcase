@@ -8,11 +8,18 @@ on the second user.
 WebToNotion solves this by combining a deterministic schema fetch with an AI mapping step:
 
 1. **Fetch** the exact database schema from the Notion API.
-2. **Inject** that schema into a PydanticAI agent's system prompt.
+2. **Inject** that schema into a PydanticAI agent's instructions.
 3. **Validate** the agent's output against the schema, retrying on mismatch.
 4. **Create** the page with the validated payload.
 
 The AI never guesses what properties exist — it is told, and then checked.
+
+All four steps live in `agents/writer.py` (`build_page_content` assembles the input,
+`write_video_page` runs the mapper and creates the page). Both `POST /api/v1/process/url`
+and the chat `save_to_notion` tool call it — the Notion write is defined once.
+`NotionService` itself is a pure Notion API client: `get_databases`, `create_page`,
+`get_database_properties`, `health_check`. It no longer imports the mapper agent or any
+video model.
 
 ## Fetching the schema
 
@@ -33,10 +40,15 @@ the integration hasn't been shared with fails fast with 401.
 
 ## The mapper agent
 
-`services/analysis/notion_mapper.py` defines `notion_mapper_agent`: a PydanticAI agent with
-`output_type=PromptedOutput(NotionPagePayload)` running on `OPENROUTER_MODEL`.
+`services/analysis/notion_mapper.py` builds the mapper agent through
+`build_mapper_agent(settings)` — a factory wrapping an `@lru_cache`d inner keyed on
+`(model_name, api_key, retries)`, the same pattern every other agent in the repo uses. There
+is **no `notion_mapper_agent` module global**; nothing constructs an `OpenRouterModel` at
+import time. The agent has `output_type=PromptedOutput(NotionPagePayload)` and runs on
+`OPENROUTER_MODEL`.
 
-The schema arrives through a dependency, injected by a dynamic system prompt:
+The schema arrives through a dependency, injected by dynamic instructions registered inside
+the factory:
 
 ```python
 @dataclass
@@ -44,15 +56,20 @@ class MapperDependencies:
     schema: Dict[str, Any]
     database_id: str
 
-@notion_mapper_agent.system_prompt
 def add_schema_to_prompt(ctx: RunContext[MapperDependencies]) -> str:
     return (
         f"Target Database ID: {ctx.deps.database_id}\n"
         f"Target Database Schema: {ctx.deps.schema}\n"
     )
+# ... inside build_mapper_agent:
+#   agent.instructions(add_schema_to_prompt)
+#   agent.output_validator(validate_notion_payload)
 ```
 
-The static half of the system prompt teaches the agent the Notion property-value grammar —
+`add_schema_to_prompt` and `validate_notion_payload` are module-level plain functions now,
+registered on the agent when the factory builds it rather than via decorators at import.
+
+The static half of the instructions teaches the agent the Notion property-value grammar —
 how `title`, `rich_text`, `select`, `multi_select`, `date`, `number`, and `url` values are
 shaped, which block types are valid children, and which property types to skip because
 Notion computes them itself (`formula`, `rollup`, `created_time`, `last_edited_time`,
@@ -68,9 +85,9 @@ explicitly shown.
 The output validator is where correctness is actually enforced:
 
 ```python
-@notion_mapper_agent.output_validator
 async def validate_notion_payload(ctx, output: NotionPagePayload) -> NotionPagePayload:
     ...
+# registered by the factory: agent.output_validator(validate_notion_payload)
 ```
 
 It raises `ModelRetry` — which sends the error back to the model for another attempt,
@@ -86,7 +103,8 @@ name doesn't reach Notion, it comes back as a correction.
 
 ## Creating the page
 
-`create_video_page` filters the payload before sending:
+`agents/writer.write_video_page` filters the mapper's payload before handing it to
+`NotionService.create_page`:
 
 ```python
 properties = {k: v for k, v in page_payload.properties.items() if v}
@@ -95,7 +113,10 @@ properties = {k: v for k, v in page_payload.properties.items() if v}
 Empty values are dropped because Pydantic's `exclude_none` can leave bare `{}` for optional
 fields like `select` and `date`, which Notion rejects outright.
 
-The `children` blocks are passed through as-is and become the page body.
+The `children` blocks are passed through as-is and become the page body. `write_video_page`
+returns a `SaveResult` (`page_id`, `page_url`, `database_id`, `title`); a mapper failure is
+wrapped as `ContentProcessingError` (→ HTTP 500), while `create_page` errors
+(`NotionAuthenticationError` → 401, `NotionAPIError` → 503) propagate untouched.
 
 ## Payload shape
 
@@ -145,8 +166,10 @@ Notion's documented 3 req/s ceiling. It applies to `get_databases`, `create_page
 
 ## Constraints
 
-- Only the first 500 characters of the transcript are sent to the mapper agent.
-- Two OpenRouter calls happen per request — one for content analysis, one for mapping.
+- A transcript excerpt (up to `_TRANSCRIPT_EXCERPT_CHARS`, currently 4000) plus the title,
+  description, and any cached summary are what `build_page_content` sends to the mapper.
+- One OpenRouter call happens per `/process/url` request — the mapper. There is no separate
+  content-analysis call any more.
 - The mapper is prompt-driven, so upgrading `OPENROUTER_MODEL` changes mapping quality.
   Weaker models fail the output validator more often, consuming retries.
 - Do not mock the payload shape in tests. Construct `NotionPagePayload` directly so schema

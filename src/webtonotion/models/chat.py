@@ -145,6 +145,22 @@ class ToolError(BaseModel):
     detail: str | None = Field(default=None, description="Optional additional detail")
 
 
+class SaveResult(BaseModel):
+    """Success return of `save_to_notion` and the shared write path.
+
+    Attributes:
+        page_id: The Notion page ID of the created/updated page
+        page_url: The full URL to the created/updated Notion page
+        database_id: The Notion database ID the page was saved to
+        title: The title of the saved page
+    """
+
+    page_id: str = Field(..., description="Notion page ID of the created/updated page")
+    page_url: str = Field(..., description="Full URL to the Notion page")
+    database_id: str = Field(..., description="Notion database ID where the page was saved")
+    title: str = Field(..., description="Title of the saved page")
+
+
 class VideoMetadata(BaseModel):
     """Chat-sized video metadata returned by ``get_video_metadata``."""
 

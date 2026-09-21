@@ -7,10 +7,11 @@ Four tools back the database-selection flow:
 - ``inspect_schema`` — property names, types, and select options for one database.
 - ``confirm_database`` — flips the session's write gate; its own tool so history
   shows exactly which turn granted the write.
-- ``save_to_notion`` — gate enforcement only in this PR. It reads the confirmed
-  database id off the session and refuses otherwise, returning a structured value
-  rather than raising, never trusting the model's own claim that a database was
-  confirmed.
+- ``save_to_notion`` — enforces the write gate, then runs the real write. It reads
+  the confirmed database id off the session and refuses otherwise, returning a
+  structured value rather than raising, never trusting the model's own claim that a
+  database was confirmed. Once the gate is open it delegates to
+  :mod:`webtonotion.agents.writer` to build the page content and create the page.
 """
 
 from __future__ import annotations
@@ -20,7 +21,19 @@ from typing import Any, Union
 from pydantic_ai import RunContext
 
 from webtonotion.agents.deps import AgentDeps
-from webtonotion.models.chat import DatabaseCandidate, SchemaInfo, ToolError, WriteBlocked
+from webtonotion.agents.errors import RECOVERABLE_VIDEO_ERRORS
+from webtonotion.agents.writer import build_page_content, get_database_schema, write_video_page
+from webtonotion.config.logging import get_logger
+from webtonotion.exceptions import NotionAPIError, NotionAuthenticationError, NotionRateLimitError
+from webtonotion.models.chat import (
+    DatabaseCandidate,
+    SaveResult,
+    SchemaInfo,
+    ToolError,
+    WriteBlocked,
+)
+
+logger = get_logger(__name__)
 
 # Notion property types that carry a fixed set of named options.
 _OPTION_PROPERTY_TYPES = frozenset({"select", "multi_select", "status"})
@@ -81,8 +94,15 @@ async def find_databases(ctx: RunContext[AgentDeps], hint: str) -> list[Database
 
 
 async def inspect_schema(ctx: RunContext[AgentDeps], database_id: str) -> SchemaInfo:
-    """Return the property names, types, and select options of one database."""
-    properties = await ctx.deps.notion_service.get_database_properties(database_id)
+    """Return the property names, types, and select options of one database.
+
+    The schema is cached (see :func:`webtonotion.agents.writer.get_database_schema`),
+    so a later ``save_to_notion`` call for the same database in this session reuses
+    it instead of re-fetching from Notion.
+    """
+    properties = await get_database_schema(
+        notion_service=ctx.deps.notion_service, cache=ctx.deps.cache, database_id=database_id
+    )
 
     prop_types: dict[str, str] = {}
     select_options: dict[str, list[str]] = {}
@@ -124,8 +144,8 @@ async def confirm_database(ctx: RunContext[AgentDeps], database_id: str) -> str:
 
 async def save_to_notion(
     ctx: RunContext[AgentDeps], url: str, database_id: str
-) -> Union[WriteBlocked, ToolError]:
-    """Save to Notion — gate enforcement only in this PR.
+) -> Union[SaveResult, WriteBlocked, ToolError]:
+    """Save the video at ``url`` to the confirmed Notion database.
 
     The gate is a single column, ``session.confirmed_database_id``. If it is unset,
     or does not match the requested ``database_id``, the write is refused with a
@@ -134,8 +154,11 @@ async def save_to_notion(
     claims. See the module docstring for what this does and does not guarantee
     about how the column got set.
 
-    When the gate is open, this returns a placeholder :class:`ToolError`; the actual
-    mapper-backed write lands in PR 3.
+    Once the gate is open, this builds the bounded page content from the video
+    pipeline and runs the shared writer (:func:`webtonotion.agents.writer.write_video_page`)
+    to create the page, returning a :class:`SaveResult`. A video that cannot be
+    prepared or a Notion rejection comes back as a :class:`ToolError` so the agent
+    can relay it; an auth failure and ``UsageLimitExceeded`` propagate.
     """
     confirmed = ctx.deps.session.confirmed_database_id
 
@@ -157,10 +180,22 @@ async def save_to_notion(
             candidates=[],
         )
 
-    return ToolError(
-        reason="write pipeline lands in PR 3",
-        detail=(
-            f"Gate is open for database '{database_id}' (url={url}), but the "
-            "mapper-backed write is not implemented yet."
-        ),
-    )
+    try:
+        content = await build_page_content(video_service=ctx.deps.video_service, url=url)
+        return await write_video_page(
+            notion_service=ctx.deps.notion_service,
+            settings=ctx.deps.settings,
+            database_id=database_id,
+            content=content,
+            cache=ctx.deps.cache,
+            usage=ctx.usage,
+            usage_limits=ctx.usage_limits,
+        )
+    except RECOVERABLE_VIDEO_ERRORS as e:
+        logger.warning(f"save_to_notion could not prepare {url}: {e}")
+        return ToolError(reason="Could not prepare this video for saving.", detail=str(e))
+    except NotionAuthenticationError:
+        raise
+    except (NotionAPIError, NotionRateLimitError) as e:
+        logger.warning(f"save_to_notion: Notion rejected the write for {url}: {e}")
+        return ToolError(reason="Notion rejected the write.", detail=str(e))

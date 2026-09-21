@@ -6,6 +6,7 @@ from .chat import (
     ChatReply,
     ChatRequest,
     DatabaseCandidate,
+    SaveResult,
     SchemaInfo,
     SummaryLength,
     SummaryResult,
@@ -18,20 +19,21 @@ from .chat import (
 from .notion import NotionDatabase, NotionPage, NotionPageResponse
 from .request import ProcessURLRequest
 from .transcript import StoredTranscript, TranscriptRef, TranscriptSegment
-from .video import VideoContent
+from .video import VideoPageContent
 
 __all__ = [
     "ProcessURLRequest",
     "NotionDatabase",
     "NotionPage",
     "NotionPageResponse",
-    "VideoContent",
+    "VideoPageContent",
     "ChatRequest",
     "ChatReply",
     "DatabaseCandidate",
     "SchemaInfo",
     "WriteBlocked",
     "ToolError",
+    "SaveResult",
     "TraceStep",
     "VideoMetadata",
     "SummaryLength",

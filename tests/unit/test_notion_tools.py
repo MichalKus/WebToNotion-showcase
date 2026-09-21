@@ -84,6 +84,9 @@ async def test_find_databases_filters_and_ranks() -> None:
 
 @pytest.mark.asyncio
 async def test_inspect_schema_extracts_types_and_options() -> None:
+    mock_cache = AsyncMock()
+    mock_cache.get_artifact.return_value = None
+
     mock_notion_service = AsyncMock()
     mock_notion_service.get_database_properties.return_value = {
         "Name": {"type": "title"},
@@ -114,7 +117,7 @@ async def test_inspect_schema_extracts_types_and_options() -> None:
         store=AsyncMock(),
         settings=settings,
         video_service=MagicMock(),
-        cache=MagicMock(),
+        cache=mock_cache,
     )
     ctx: RunContext[AgentDeps] = RunContext(deps=deps, model=TestModel(), usage=RunUsage())
 
@@ -127,3 +130,4 @@ async def test_inspect_schema_extracts_types_and_options() -> None:
     assert schema_info.properties["URL"] == "url"
     assert schema_info.select_options["Status"] == ["To Watch", "Watched"]
     assert schema_info.select_options["Category"] == ["Tech", "Cooking"]
+    mock_cache.put_artifact.assert_awaited_once()

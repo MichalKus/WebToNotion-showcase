@@ -7,7 +7,7 @@ order: find_databases -> inspect_schema -> confirm_database -> final reply.
 
 from datetime import datetime, timezone
 from typing import Any
-from unittest.mock import MagicMock
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 from pydantic_ai import ModelResponse, TextPart, ToolCallPart, capture_run_messages, models
@@ -121,7 +121,7 @@ async def test_orchestrator_runs_selection_tools_in_order() -> None:
         store=store,
         settings=settings,
         video_service=MagicMock(),
-        cache=MagicMock(),
+        cache=AsyncMock(get_artifact=AsyncMock(return_value=None)),
     )
 
     with capture_run_messages() as captured:

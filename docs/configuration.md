@@ -17,7 +17,7 @@ The service will not work without these four:
 | Variable | Purpose |
 |---|---|
 | `NOTION_API_KEY` | Notion integration token. The integration must also be shared with each target database |
-| `OPENROUTER_API_KEY` | Content analysis and Notion mapping agents. **Both agents construct at import time — the app fails to start without it** |
+| `OPENROUTER_API_KEY` | Notion mapping agent, plus the chat orchestrator and its sub-agents. All are built lazily on first use, not at import time -- the app still starts without it, but any agent run fails once it actually calls the model |
 | `WHISPER_API_KEY` | Groq API key for transcription |
 | `API_KEY` | Value clients send as `X-API-Key`. If unset, every authenticated request returns 500 |
 
@@ -33,7 +33,7 @@ The service will not work without these four:
 | Variable | Default | Notes |
 |---|---|---|
 | `OPENROUTER_API_KEY` | — | Required |
-| `OPENROUTER_MODEL` | `openai/gpt-4o-mini` | Used by both agents. Weaker models fail the mapper's output validator more often |
+| `OPENROUTER_MODEL` | `openai/gpt-4o-mini` | Used by all agents (Notion mapper, orchestrator, sub-agents). Weaker models fail the mapper's output validator more often |
 | `WHISPER_API_KEY` | — | Groq key, not OpenAI |
 | `WHISPER_MODEL` | `whisper-large-v3` | Groq model name |
 
@@ -67,7 +67,7 @@ The service will not work without these four:
 | `RATE_LIMIT_WINDOW` | `60` | Seconds. `.env.example` ships `3600` |
 | `MAX_CONTENT_LENGTH` | `104857600` | 100 MB request body ceiling |
 | `REQUEST_TIMEOUT` | `300` | Seconds. Applies to the Notion client and yt-dlp sockets |
-| `MAX_RETRIES` | `3` | Shared by yt-dlp, Groq, and both PydanticAI agents |
+| `MAX_RETRIES` | `3` | Shared by yt-dlp, Groq, and all PydanticAI agents |
 
 Rate-limit state is a per-process dictionary. With `WORKERS > 1` the effective limit is
 multiplied by the worker count.

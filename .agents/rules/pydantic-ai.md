@@ -10,14 +10,27 @@ Two kinds of agent live in this repo, and they have different needs:
 
 - **One-shot analysis agents** in `src/webtonotion/services/analysis/` — one prompt in, one
   structured object out, no conversation.
-  - `content_analyzer.py` — `ContentAnalyzer`, topic/sentiment/location/insight extraction.
-  - `notion_mapper.py` — `notion_mapper_agent`, maps a `VideoContent` onto a Notion schema.
+  - `notion_mapper.py` — the Notion-schema mapper agent, built lazily by
+    `build_mapper_agent(settings)` (a `@lru_cache`d factory), never constructed at module
+    scope. There is no `notion_mapper_agent` module global.
 - **Multi-turn orchestrator agents** in `src/webtonotion/agents/` — chat sessions that span
   several runs and carry message history between them (see the orchestrator spec).
+- **The write path** in `src/webtonotion/agents/writer.py` — `build_page_content` assembles a
+  `VideoPageContent`, `write_video_page` runs the mapper agent and creates the Notion page.
+  Both `POST /api/v1/process/url` and the chat `save_to_notion` tool go through it; there is
+  one write path, not two.
 
 Agent output models live in `src/webtonotion/models/` (`video.py`, `notion.py`, `chat.py`),
 never beside the agent. Do not create an `src/ai/` package — agents live in the two
 locations above.
+
+### The `agents/` layer
+
+`agents/` is a formal architectural layer sitting between `api/` and `services/`:
+`api → agents → services → models/config`. `agents/` may import from `services/`; `services/`
+must **never** import from `agents/`. `agents/writer.py` lives here rather than in `services/`
+precisely because it calls both a `NotionService` and a PydanticAI agent — putting it in
+`services/` would invert the dependency direction.
 
 ## Configuring an agent
 
@@ -30,7 +43,7 @@ from pydantic_ai.models.openrouter import OpenRouterModel
 from pydantic_ai.providers.openrouter import OpenRouterProvider
 
 from webtonotion.config.settings import settings
-from webtonotion.models.video import ContentAnalysisResult
+from webtonotion.models.notion import NotionPagePayload
 
 model = OpenRouterModel(
     settings.openrouter_model,
@@ -39,7 +52,7 @@ model = OpenRouterModel(
 
 agent = Agent(
     model,
-    output_type=ContentAnalysisResult,
+    output_type=NotionPagePayload,
     retries=settings.max_retries,
     instructions="…",  # not system_prompt — see below
 )
@@ -48,8 +61,15 @@ agent = Agent(
 - `OpenRouterModel` / `OpenRouterProvider` are the correct, dedicated classes — OpenRouter is
   **not** just `OpenAIChatModel`, so keep these imports. The `"openrouter:<model>"` string form
   exists but we use the explicit form so the API key comes from `settings`.
-- Instantiate an agent **once** at module level and reuse it, like a FastAPI app or router —
-  do not build a new `Agent` per request.
+- **Build agents in a factory, never at module import.** An `OpenRouterModel` constructed at
+  import time needs an API key and breaks CI collection when one isn't set. The pattern is a
+  `build_*(settings)` function wrapping a module-level `@lru_cache`d inner keyed on the
+  *scalar* fields that matter (`model_name`, `api_key or "unset"`, `retries`) — not on the
+  `Settings` object, which isn't hashable. `agents/subagents.py` (`build_summary_agent` /
+  `build_answer_agent`), `agents/orchestrator.py` (`build_orchestrator`), and
+  `services/analysis/notion_mapper.py` (`build_mapper_agent`) all follow this. The cache
+  still gives you one reused `Agent` per config, like a FastAPI app or router — just resolved
+  on first use rather than at import.
 - Always give `output_type` a Pydantic model. Never parse free text out of a response.
 - `retries` comes from `settings.max_retries` — retry counts are centralised, not literals.
 - Reach the result via `result.output`.
@@ -189,7 +209,7 @@ models.ALLOW_MODEL_REQUESTS = False  # module level: fails loudly on any real re
 async def test_analysis():
     with agent.override(model=TestModel()):
         result = await agent.run("…")
-    assert result.output.sentiment == "neutral"
+    assert result.output.properties
 ```
 
 - Use `FunctionModel` when the test needs to script the response or assert on what the agent
