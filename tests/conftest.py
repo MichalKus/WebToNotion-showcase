@@ -5,17 +5,12 @@ for all test modules in the WebToNotion project.
 """
 
 import asyncio
-import os
 import tempfile
 from pathlib import Path
 from typing import Generator
-from unittest.mock import Mock, patch
+from unittest.mock import Mock
 
 import pytest
-from pydantic import HttpUrl
-
-from webtonotion.models.video import VideoContent
-from webtonotion.services.video_scraping_service import VideoScrapingService
 
 
 def pytest_configure(config):
@@ -97,34 +92,6 @@ def mock_video_info():
 
 
 @pytest.fixture
-def mock_video_content():
-    """Provide a mock VideoContent object."""
-    return VideoContent(
-        url=HttpUrl("https://www.youtube.com/watch?v=test_video_id"),
-        title="Test Video Title",
-        description="Test video description with technology content",
-        author="Test Channel",
-        duration=300,
-        published_at=None,
-        transcript="This is a test transcript about technology and programming",
-        topics=["technology", "tutorial", "programming"],
-        sentiment="positive",
-        locations=["San Francisco", "Silicon Valley"],
-        metadata={
-            "platform": "youtube",
-            "video_id": "test_video_id",
-            "view_count": 1000,
-            "like_count": 50,
-            "comment_count": 25,
-            "extraction_method": "ytdlp",
-            "thumbnail": "https://img.youtube.com/vi/test_video_id/maxresdefault.jpg",
-            "tags": ["technology", "tutorial", "programming"],
-            "categories": ["Science & Technology"],
-        },
-    )
-
-
-@pytest.fixture
 def mock_long_video_info():
     """Provide mock video information for a long video."""
     return {
@@ -138,18 +105,6 @@ def mock_long_video_info():
         "like_count": 200,
         "extractor": "youtube",
     }
-
-
-@pytest.fixture
-def video_scraping_service(temp_cache_dir, mock_openai_client):
-    """Provide a VideoScrapingService instance configured for testing."""
-    with patch(
-        "webtonotion.services.video_scraping_service.openai.AsyncOpenAI",
-        return_value=mock_openai_client,
-    ):
-        service = VideoScrapingService()
-        service.cache_dir = temp_cache_dir
-        return service
 
 
 @pytest.fixture
@@ -231,47 +186,3 @@ def mock_pydantic_ai_agent():
     mock_result.data = "Topics: technology, tutorial\nSentiment: positive\nLocations: San Francisco"
     mock_agent.run = Mock(return_value=mock_result)
     return mock_agent
-
-
-# Utility functions for tests
-
-
-def create_test_video_content(
-    url: str = "https://www.youtube.com/watch?v=test", **kwargs
-) -> VideoContent:
-    """Create a VideoContent instance for testing with customizable fields."""
-    defaults = {
-        "url": HttpUrl(url),
-        "title": "Test Video",
-        "description": "Test description",
-        "author": "Test Author",
-        "duration": 300,
-        "published_at": None,
-        "transcript": "Test transcript",
-        "topics": ["test"],
-        "sentiment": "neutral",
-        "locations": [],
-        "metadata": {"platform": "youtube", "extraction_method": "test"},
-    }
-    defaults.update(kwargs)
-    return VideoContent(**defaults)
-
-
-def assert_video_content_structure(content: VideoContent):
-    """Assert that a VideoContent object has the expected structure."""
-    assert content.url is not None
-    assert isinstance(content.url, HttpUrl)
-    assert content.title is not None
-    assert isinstance(content.title, str)
-    assert content.description is not None
-    assert isinstance(content.description, str)
-    assert content.author is not None
-    assert isinstance(content.author, str)
-    assert content.duration is not None
-    assert isinstance(content.duration, int)
-    assert content.duration > 0
-    assert isinstance(content.topics, list)
-    assert content.sentiment in ["positive", "negative", "neutral"]
-    assert isinstance(content.locations, list)
-    assert isinstance(content.metadata, dict)
-    assert "platform" in content.metadata

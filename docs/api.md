@@ -22,7 +22,9 @@ Requests are rate limited per client IP using `RATE_LIMIT_REQUESTS` and `RATE_LI
 
 ## `POST /api/v1/process/url`
 
-Extract a video, analyse it, and create a page in the target Notion database.
+Extract a video and create a page in the target Notion database. The endpoint has no
+pipeline of its own — it calls `agents/writer.py` (`build_page_content` → `write_video_page`),
+the same shared write path the chat `save_to_notion` tool uses.
 
 ### Request
 
@@ -52,39 +54,35 @@ with 401.
   "content_type": "video",
   "video_details": {
     "title": "How to Make Perfect Pasta",
-    "duration": 480.0,
     "author": "Chef Mario",
-    "topics": ["cooking", "italian cuisine", "pasta"],
-    "sentiment": "positive",
-    "locations": ["Bologna", "Italy"],
+    "duration": 480.0,
+    "platform": "youtube",
+    "language": "en",
     "transcript_length": 1500,
-    "metadata": {
-      "platform": "youtube",
-      "view_count": 125000,
-      "like_count": 3500,
-      "video_id": "dQw4w9WgXcQ",
-      "key_insights": "[\"Salt the water heavily\", \"Finish pasta in the sauce\"]",
-      "content_category": "tutorial"
-    }
+    "summary_length": 0
   },
   "processing_stats": {
     "transcription_available": true,
-    "ai_analysis_completed": true,
-    "cache_hit": false
+    "summary_available": false
   }
 }
 ```
 
 Notes on specific fields:
 
+- `video_details` carries only what `VideoPageContent` holds. There is no longer a `topics`,
+  `sentiment`, `locations`, `key_insights`, or nested `metadata` block — the content-analysis
+  step that produced them was removed, not replaced. The Notion mapper agent infers the
+  target database's properties directly from the title, description, transcript excerpt, and
+  any cached summary.
 - `duration` is a float in seconds, or `null` when the platform doesn't report one.
-- `transcript_length` is the character count, not a word count. It is `0` when
-  transcription was skipped or failed.
-- `metadata.key_insights` is a **JSON-encoded string**, not an array.
-- `metadata.skipped_transcription` is present with value `"duration_exceeded"` when the
-  video was longer than `MAX_VIDEO_DURATION`.
-- `processing_stats.cache_hit` is currently always `false` — the flag is not yet wired to
-  the cache lookup.
+- `language` is the transcript's detected language, or `null` when nothing was transcribed.
+- `transcript_length` / `summary_length` are character counts of the excerpt and the summary
+  actually passed to the mapper. `transcript_length` is `0` when transcription was skipped or
+  failed; `summary_length` is `0` unless a summary was already cached for this video (the
+  endpoint never runs the summary sub-agent itself — the chat flow populates that cache).
+- `processing_stats.transcription_available` / `summary_available` are just
+  `bool(transcript_excerpt)` / `bool(summary)`.
 
 ### Errors
 
@@ -93,8 +91,12 @@ Notes on specific fields:
 | 400 | `database_id` missing, or the URL is not a supported video URL |
 | 401 | Missing or invalid `X-API-Key`, or Notion authentication failed |
 | 422 | Request body failed validation, or extraction/transcription failed (`VideoScrapingError`) |
-| 500 | Server `API_KEY` not configured, or an unexpected error |
+| 500 | Server `API_KEY` not configured, the Notion mapper agent failed (`ContentProcessingError`), or an unexpected error |
 | 503 | Notion API returned an error |
+
+A Notion-mapping failure is a `500` (via `ContentProcessingError` → `WebToNotionError`). It
+was a `503` before this endpoint moved onto the shared write path — the write no longer runs
+inside `NotionService`, so a model-side failure is no longer reported as a Notion API error.
 
 Error bodies follow FastAPI's shape: `{"detail": "..."}`. Unexpected 500s return a generic
 message; the specific error is logged server-side with the request ID.
@@ -137,8 +139,9 @@ once a database is confirmed for the session, `save_to_notion` — a write
 attempted before confirmation is refused by the tool itself, not by the
 prompt. Requires `X-API-Key`.
 
-The mapper-backed write is not implemented yet; a confirmed `save_to_notion`
-call currently returns a placeholder result. See
+Once a database is confirmed, `save_to_notion` runs the real write through the shared
+`agents/writer.py` path — the same `build_page_content` + `write_video_page` that backs
+`POST /api/v1/process/url`. See
 [the design spec](superpowers/specs/2026-08-17-agentic-orchestrator-design.md)
 for the full tool belt this surface is built towards.
 
@@ -355,6 +358,7 @@ Beyond this service's own per-IP limit, requests are bounded by:
 
 - **Notion** — the client is throttled to 3 requests/second internally
 - **Groq** — transcription is subject to your account's quota
-- **OpenRouter** — two agent calls per request (analysis + mapping)
+- **OpenRouter** — one mapper-agent call per `/process/url` request; a chat turn may make
+  several (orchestrator + any summary/answer sub-agents)
 - **Video platforms** — some throttle or block datacenter IPs; see
   [`COOKIES_FILE_PATH`](configuration.md#video-extraction)

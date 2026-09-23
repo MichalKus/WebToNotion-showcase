@@ -12,7 +12,7 @@ Services and models never import from `api`, `agents`, or `main`.
 |---|---|---|
 | API | `src/webtonotion/api/` | Routers (`process`, `chat`, `health`) and middleware |
 | DI | `src/webtonotion/dependencies.py` | Settings, service construction, auth, rate limiting |
-| Agents | `src/webtonotion/agents/` | Multi-turn orchestrator, its tools, chat service, session store |
+| Agents | `src/webtonotion/agents/` | Multi-turn orchestrator, its tools, chat service, session store, and `writer.py` — the shared Notion write path |
 | Services | `src/webtonotion/services/` | Extraction, analysis, storage, Notion integration |
 | Models | `src/webtonotion/models/` | Pydantic models for requests, video content, Notion payloads, chat |
 | Config | `src/webtonotion/config/` | `settings.py` (pydantic-settings), `logging.py` (structured logging + Logfire) |
@@ -23,6 +23,8 @@ Services and models never import from `api`, `agents`, or `main`.
 agents/
 ├── orchestrator.py         build_orchestrator() — the multi-turn chat agent (factory, not
 │                            module-level; built once by a DI singleton, never at import)
+├── writer.py                build_page_content() + write_video_page() — the single Notion
+│                            write path, shared by /process/url and save_to_notion
 ├── deps.py                  AgentDeps — services + session injected via RunContext
 ├── capabilities.py          ProcessHistory (history-trim policy) + tool registration
 ├── chat_service.py          ChatService — one turn: load history, run, persist, reply
@@ -38,8 +40,9 @@ agents/
     └── sqlite_store.py        SqliteStore — WAL SQLite, append-only messages
 ```
 
-`save_to_notion` currently only enforces the confirm-gate; the mapper-backed
-write lands in a later PR — see the
+`save_to_notion` runs the confirm-gate check and then, if the gate is open, calls
+`agents/writer.py` (`build_page_content` → `write_video_page`) — the exact same functions
+`POST /api/v1/process/url` calls. There is one write path, not two — see the
 [design spec](superpowers/specs/2026-08-17-agentic-orchestrator-design.md).
 
 ### Sub-agent layer
@@ -74,13 +77,18 @@ services/
 │   └── ytdlp_extractor.py  yt-dlp metadata + audio download
 ├── analysis/
 │   ├── transcriber.py      AudioTranscriber — Groq Whisper API
-│   ├── content_analyzer.py ContentAnalyzer — PydanticAI agent via OpenRouter
-│   └── notion_mapper.py    notion_mapper_agent — VideoContent → Notion payload
+│   └── notion_mapper.py    build_mapper_agent(settings) — lazy factory; maps title/
+│                           description/summary/transcript onto a Notion payload
 ├── storage/
 │   └── file_cache.py       FileCacheService — JSON cache keyed by URL hash
-├── video_scraping_service.py  Orchestrates extract → transcribe → analyse
-└── notion_service.py          notion-client wrapper: schema fetch, page creation
+├── video_scraping_service.py  is_video_url, fetch_metadata, fetch_transcript, store_summary
+└── notion_service.py          pure notion-client wrapper: get_databases, create_page,
+                               get_database_properties, health_check
 ```
+
+`content_analyzer.py` is gone. The `topics` / `sentiment` / `locations` extraction step it
+performed was removed, not replaced — the mapper agent now infers Notion properties directly
+from the title, description, any cached summary, and the transcript excerpt.
 
 ## High-level flow
 
@@ -89,20 +97,20 @@ graph TD
     U[Client] -->|"POST /api/v1/process/url<br/>X-API-Key"| API[FastAPI router]
     API --> AUTH[verify_api_key + per-IP rate limit]
     AUTH --> NS1[NotionService: fetch database schema]
-    NS1 --> VS[VideoScrapingService.process_video]
+    NS1 --> BPC[writer.build_page_content]
 
-    VS --> CACHE{Cached?}
-    CACHE -->|hit| DONE[VideoContent]
-    CACHE -->|miss| YT[YtDlpExtractor]
-    YT -->|audio| TR[AudioTranscriber → Groq Whisper]
-    TR --> AN[ContentAnalyzer → OpenRouter]
-    YT -->|metadata| AN
-    AN --> DONE
-    DONE --> NS2[NotionService.create_video_page]
-    NS2 --> MAP[notion_mapper_agent → OpenRouter]
-    MAP --> NOTION[(Notion API)]
+    BPC --> MD[VideoScrapingService.fetch_metadata → yt-dlp]
+    BPC --> TR[VideoScrapingService.fetch_transcript → Groq Whisper]
+    MD --> WVP[writer.write_video_page]
+    TR --> WVP
+    WVP --> MAP[build_mapper_agent → OpenRouter]
+    MAP --> NC[NotionService.create_page]
+    NC --> NOTION[(Notion API)]
     NOTION --> API
 ```
+
+The chat `save_to_notion` tool enters this same graph at `writer.build_page_content` once
+the session's write gate is open.
 
 ## Request sequence
 
@@ -110,6 +118,7 @@ graph TD
 sequenceDiagram
     participant C as Client
     participant R as process router
+    participant W as agents/writer
     participant N as NotionService
     participant V as VideoScrapingService
     participant Y as yt-dlp
@@ -126,23 +135,25 @@ sequenceDiagram
     R->>V: is_video_url(url)
     V-->>R: true (else HTTP 400)
 
-    R->>V: process_video(url)
-    V->>V: file cache lookup
-    V->>Y: extract metadata + audio
+    R->>W: build_page_content(url)
+    W->>V: fetch_metadata(url)
+    V->>Y: extract metadata
     Y-->>V: ExtractionData
+    V-->>W: metadata
+    W->>V: fetch_transcript(url)
     V->>G: transcribe(audio)
     G-->>V: transcript
-    V->>O: analyse(title, description, transcript)
-    O-->>V: topics, sentiment, locations, insights
-    V->>V: cache VideoContent
-    V-->>R: VideoContent
+    V-->>W: transcript (empty on a tolerable failure)
+    W-->>R: VideoPageContent (+ any cached summary)
 
-    R->>N: create_video_page(db_id, content, schema)
-    N->>O: notion_mapper_agent(content + schema)
-    O-->>N: NotionPagePayload
+    R->>W: write_video_page(db_id, content, schema)
+    W->>O: build_mapper_agent(settings).run(prompt + schema)
+    O-->>W: NotionPagePayload (mapper failure → ContentProcessingError → 500)
+    W->>N: create_page(payload)
     N->>N: pages.create
-    N-->>R: NotionPageResponse
-    R-->>C: 200 + page id/url + details
+    N-->>W: NotionPageResponse
+    W-->>R: SaveResult
+    R-->>C: 200 + page id/url + video_details
 ```
 
 The schema fetch and video-URL check happen **before** extraction, so an unreachable
@@ -245,7 +256,7 @@ The health router is mounted without those dependencies, so `/health/`, `/health
 |---|---|---|
 | yt-dlp | Video metadata + audio download | `COOKIES_FILE_PATH`, `MAX_FILE_SIZE`, `MAX_VIDEO_DURATION` |
 | Groq | Whisper audio transcription | `WHISPER_API_KEY`, `WHISPER_MODEL` |
-| OpenRouter | Content analysis, Notion mapping, and chat orchestrator agents | `OPENROUTER_API_KEY`, `OPENROUTER_MODEL` |
+| OpenRouter | Notion mapping and the chat orchestrator / sub-agents | `OPENROUTER_API_KEY`, `OPENROUTER_MODEL` |
 | Notion | Schema fetch + page creation | `NOTION_API_KEY`, `NOTION_VERSION` |
 | Logfire | Tracing and structured logs | `LOGFIRE_TOKEN` (optional) |
 
@@ -261,8 +272,14 @@ uses it to normalise non-mp3 downloads to mono 16 kHz mp3.
 | `VideoScrapingError` | 422 |
 | `NotionAuthenticationError` | 401 |
 | `NotionAPIError` | 503 |
+| `ContentProcessingError` (mapper failure) | 500 |
 | `WebToNotionError` | 500 |
 | Anything else | 500 (detail suppressed) |
+
+`ContentProcessingError` is an `AIAgentError` → `WebToNotionError`, so it lands on the 500
+branch. A Notion-mapping failure used to surface as a misleading 503 (it went through
+`NotionService`); routing the write through `agents/writer.py` makes it a 500, which is what
+a model-side failure actually is.
 
 `api/chat.py` follows the same style, plus two errors specific to the session store
 (`src/webtonotion/agents/session/store.py`), raised by `ChatService` and never seen
@@ -289,13 +306,17 @@ built.
 synchronous. Wrap them with `asyncio.to_thread` rather than calling them directly from an
 `async def`.
 
-**Analysis failures are typed, not silent.** `ContentAnalyzer.analyze` raises
-`ContentProcessingError` on any failure rather than returning an empty,
-neutral-sentiment `ContentAnalysisResult` — a plausible-looking empty analysis is
-one an agent (or a person) downstream would believe. A quota error at the
-analysis step now fails the `/process/url` request (422) instead of silently
-producing a thinner page; the video tools' `summarize`/`ask_about_video` catch it
-and return a `ToolError` the orchestrator can explain instead.
+**One write path, no separate analysis pass.** There is no `ContentAnalyzer` and no
+`topics`/`sentiment`/`locations` extraction step. `agents/writer.py` assembles a
+`VideoPageContent` (metadata + a transcript excerpt + any summary already cached by the chat
+tools) and the Notion mapper agent infers the target database's properties from that
+directly. Both `/process/url` and the chat `save_to_notion` tool call
+`build_page_content` + `write_video_page` — the write is defined once.
+
+**Mapper failures are typed, not silent.** `write_video_page` wraps a mapper-agent failure
+(model error, retry exhaustion) as `ContentProcessingError`, which the `/process/url` handler
+maps to HTTP 500. The video tools' `summarize`/`ask_about_video` catch the same error class
+and return a `ToolError` the orchestrator can explain instead of aborting the turn.
 
 ## Related
 

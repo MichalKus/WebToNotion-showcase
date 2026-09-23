@@ -3,40 +3,38 @@
 This module defines the PydanticAI agent responsible for mapping video content
 to a specific Notion database schema. It uses the schema as a strict guide
 to generate a valid Notion page payload.
+
+The agent is built lazily by :func:`build_mapper_agent` rather than at module
+import: constructing an :class:`OpenRouterModel` at import time requires an API
+key. The factory's cached inner is keyed on the scalar settings that determine
+the underlying HTTP client (model name, API key, retries), matching every other
+agent factory in the repo (see ``agents/subagents.py``).
 """
 
+from __future__ import annotations
+
 from dataclasses import dataclass
-from typing import Any, Dict
+from functools import lru_cache
+from typing import TYPE_CHECKING, Any, Dict
 
 from pydantic_ai import Agent, ModelRetry, PromptedOutput, RunContext
 from pydantic_ai.models.openrouter import OpenRouterModel
 from pydantic_ai.providers.openrouter import OpenRouterProvider
-from pydantic_ai.settings import ModelSettings
 
-from webtonotion.config.settings import settings
 from webtonotion.models.notion import NotionPagePayload
 
+if TYPE_CHECKING:
+    from webtonotion.config.settings import Settings
 
-# Define the agent with a specific model (e.g., GPT-4o for complex reasoning)
-# We use a dependency to inject the schema at runtime
+
+# We use a dependency to inject the schema at runtime.
 @dataclass
 class MapperDependencies:
     schema: Dict[str, Any]
     database_id: str
 
 
-# Initialize OpenRouter model using settings.
-model = OpenRouterModel(
-    settings.openrouter_model,
-    provider=OpenRouterProvider(api_key=settings.openrouter_api_key or "unset"),
-)
-
-notion_mapper_agent = Agent(
-    model,
-    deps_type=MapperDependencies,
-    output_type=PromptedOutput(NotionPagePayload),
-    retries=settings.max_retries,
-    system_prompt="""You are a Notion API specialist. Map video content to Notion database properties.
+MAPPER_INSTRUCTIONS = """You are a Notion API specialist. Map video content to Notion database properties.
 
         ## Your Task
         Transform video metadata into a valid Notion page payload that matches the provided database schema exactly.
@@ -116,20 +114,17 @@ notion_mapper_agent = Agent(
             {"object": "block", "type": "paragraph", "paragraph": {"rich_text": [{"text": {"content": "Educational programming content for beginners"}}]}}
           ]
         }
-        """,
-)
+        """
 
 
-@notion_mapper_agent.system_prompt
 def add_schema_to_prompt(ctx: RunContext[MapperDependencies]) -> str:
-    """Dynamic system prompt to inject the specific database schema."""
+    """Dynamic instruction to inject the specific database schema."""
     return (
         f"Target Database ID: {ctx.deps.database_id}\n"
         f"Target Database Schema: {ctx.deps.schema}\n"
     )
 
 
-@notion_mapper_agent.output_validator
 async def validate_notion_payload(
     ctx: RunContext[MapperDependencies], output: NotionPagePayload
 ) -> NotionPagePayload:
@@ -170,3 +165,33 @@ async def validate_notion_payload(
             )
 
     return output
+
+
+@lru_cache(maxsize=4)
+def _mapper_agent(
+    model_name: str, api_key: str, retries: int
+) -> Agent[MapperDependencies, NotionPagePayload]:
+    model = OpenRouterModel(
+        model_name,
+        provider=OpenRouterProvider(api_key=api_key),
+    )
+    agent: Agent[MapperDependencies, NotionPagePayload] = Agent(
+        model,
+        deps_type=MapperDependencies,
+        output_type=PromptedOutput(NotionPagePayload),
+        retries=retries,
+        instructions=MAPPER_INSTRUCTIONS,
+        name="notion_mapper",
+    )
+    agent.instructions(add_schema_to_prompt)
+    agent.output_validator(validate_notion_payload)
+    return agent
+
+
+def build_mapper_agent(settings: "Settings") -> Agent[MapperDependencies, NotionPagePayload]:
+    """Return the (cached) Notion mapper agent for ``settings``."""
+    return _mapper_agent(
+        settings.openrouter_model,
+        settings.openrouter_api_key or "unset",
+        settings.max_retries,
+    )

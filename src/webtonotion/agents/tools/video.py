@@ -23,6 +23,7 @@ from pydantic_ai import RunContext
 from pydantic_ai.exceptions import ModelAPIError, ModelHTTPError, UnexpectedModelBehavior
 
 from webtonotion.agents.deps import AgentDeps
+from webtonotion.agents.errors import FATAL_AUTH_HTTP_STATUS, RECOVERABLE_VIDEO_ERRORS
 from webtonotion.agents.subagents import (
     answer_question,
     build_answer_agent,
@@ -30,7 +31,6 @@ from webtonotion.agents.subagents import (
     summarize_text,
 )
 from webtonotion.config.logging import get_logger
-from webtonotion.exceptions import ContentProcessingError, VideoScrapingError
 from webtonotion.models.chat import (
     AnswerResult,
     SummaryLength,
@@ -43,13 +43,9 @@ from webtonotion.models.transcript import TranscriptRef
 
 logger = get_logger(__name__)
 
-# Failures the agent should see and work around, rather than aborting the run.
-_RECOVERABLE = (VideoScrapingError, ContentProcessingError)
-
 # Model-provider failures from a sub-agent run. Transient ones (5xx, 429, timeouts,
 # malformed responses) become a ToolError; a 401/403 is a config error and re-raises.
 _MODEL_PROVIDER_ERROR = (ModelAPIError, UnexpectedModelBehavior)
-_FATAL_HTTP_STATUS = frozenset({401, 403})
 
 
 def _sub_agent_tool_error(exc: Exception, reason: str) -> ToolError:
@@ -60,7 +56,7 @@ def _sub_agent_tool_error(exc: Exception, reason: str) -> ToolError:
     provider, a dropped connection, an unparseable response -- is reported to the agent
     so the turn is not lost to a 500.
     """
-    if isinstance(exc, ModelHTTPError) and exc.status_code in _FATAL_HTTP_STATUS:
+    if isinstance(exc, ModelHTTPError) and exc.status_code in FATAL_AUTH_HTTP_STATUS:
         raise exc
     return ToolError(reason=reason, detail=str(exc))
 
@@ -80,7 +76,7 @@ async def get_video_metadata(
     """
     try:
         data = await ctx.deps.video_service.fetch_metadata(url)
-    except _RECOVERABLE as e:
+    except RECOVERABLE_VIDEO_ERRORS as e:
         logger.warning(f"get_video_metadata failed for {url}: {e}")
         return ToolError(reason="Could not read this video's metadata.", detail=str(e))
 
@@ -103,7 +99,7 @@ async def get_transcript(ctx: RunContext[AgentDeps], url: str) -> Union[Transcri
     """
     try:
         transcript = await ctx.deps.video_service.fetch_transcript(url)
-    except _RECOVERABLE as e:
+    except RECOVERABLE_VIDEO_ERRORS as e:
         logger.warning(f"get_transcript failed for {url}: {e}")
         return ToolError(reason="Could not transcribe this video.", detail=str(e))
 
@@ -132,7 +128,7 @@ async def summarize(
 
     try:
         transcript = await ctx.deps.video_service.fetch_transcript(url)
-    except _RECOVERABLE as e:
+    except RECOVERABLE_VIDEO_ERRORS as e:
         logger.warning(f"summarize failed to obtain a transcript for {url}: {e}")
         return ToolError(reason="Could not read this video to summarize it.", detail=str(e))
 
@@ -147,7 +143,7 @@ async def summarize(
             usage=ctx.usage,
             usage_limits=ctx.usage_limits,
         )
-    except _RECOVERABLE as e:
+    except RECOVERABLE_VIDEO_ERRORS as e:
         logger.warning(f"summarize failed for {url}: {e}")
         return ToolError(reason="Could not summarize this video.", detail=str(e))
     except _MODEL_PROVIDER_ERROR as e:
@@ -170,7 +166,7 @@ async def ask_about_video(
     """
     try:
         transcript = await ctx.deps.video_service.fetch_transcript(url)
-    except _RECOVERABLE as e:
+    except RECOVERABLE_VIDEO_ERRORS as e:
         logger.warning(f"ask_about_video failed to obtain a transcript for {url}: {e}")
         return ToolError(reason="Could not read this video to answer about it.", detail=str(e))
 
@@ -190,7 +186,7 @@ async def ask_about_video(
             usage=ctx.usage,
             usage_limits=ctx.usage_limits,
         )
-    except _RECOVERABLE as e:
+    except RECOVERABLE_VIDEO_ERRORS as e:
         logger.warning(f"ask_about_video failed for {url}: {e}")
         return ToolError(reason="Could not answer that about this video.", detail=str(e))
     except _MODEL_PROVIDER_ERROR as e:

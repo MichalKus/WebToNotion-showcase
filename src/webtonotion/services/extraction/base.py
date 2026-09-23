@@ -40,14 +40,39 @@ class VideoExtractor(ABC):
     """Abstract base class for video extraction strategies."""
 
     @abstractmethod
-    async def extract(self, url: str, download_audio: bool = True) -> ExtractionData:
-        """Extract video content from URL.
+    async def extract_metadata(self, url: str) -> ExtractionData:
+        """Resolve video metadata, without downloading the audio track.
 
         Args:
             url: The video URL to process
-            download_audio: Whether to download the audio track for transcription
 
         Returns:
-            ExtractionData object with extracted metadata and optional audio path
+            ExtractionData object with the extracted metadata and no audio path
+        """
+        pass
+
+    @abstractmethod
+    async def fetch_audio(
+        self,
+        url: str,
+        *,
+        video_id: Optional[str] = None,
+        duration: Optional[float] = None,
+    ) -> Optional[Path]:
+        """Download the audio track for a video.
+
+        Split from :meth:`extract_metadata` so a caller holding already-resolved
+        metadata -- freshly extracted or served from cache -- can ask for the audio
+        alone instead of paying for a second metadata round trip.
+
+        Args:
+            url: The video URL to process
+            video_id: Video id from an earlier extraction, used to name the audio file
+            duration: Video duration from an earlier extraction, checked against the
+                extractor's maximum before downloading
+
+        Returns:
+            Path to the downloaded mp3, or None when the video is too long or no
+            audio file materialises
         """
         pass

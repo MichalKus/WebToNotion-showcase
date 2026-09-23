@@ -1,5 +1,6 @@
 """yt-dlp video extractor implementation."""
 
+import asyncio
 import hashlib
 from datetime import datetime
 from pathlib import Path
@@ -79,21 +80,16 @@ class YtDlpExtractor(VideoExtractor, LoggerMixin):
         except (ValueError, TypeError):
             return None
 
-    async def extract(self, url: str, download_audio: bool = True) -> ExtractionData:
-        """Extract video content using yt-dlp.
+    async def extract_metadata(self, url: str) -> ExtractionData:
+        """Resolve video metadata using yt-dlp, without downloading the audio track.
 
         Args:
             url: The video URL to process.
-            download_audio: Whether to pull the audio track. ``False`` returns metadata
-                only, which is what the ``get_video_metadata`` tool needs — downloading
-                audio to answer "what is this video?" would cost a download for nothing.
         """
-        self.logger.info(f"Extracting video metadata with use of yt-dlp")
+        self.logger.info("Extracting video metadata with use of yt-dlp")
 
         try:
-            # Extract metadata first
-            with yt_dlp.YoutubeDL(self.yt_dlp_opts) as ydl:
-                info = ydl.extract_info(url, download=False)
+            info = await asyncio.to_thread(self._extract_info, url)
 
             if not info:
                 raise VideoScrapingError("Failed to extract video information")
@@ -108,27 +104,12 @@ class YtDlpExtractor(VideoExtractor, LoggerMixin):
             }
             self.logger.info(f"Extracted video metadata: {info_summary}")
 
-            duration = info.get("duration") or 0
-            audio_path = None
-
-            if not download_audio:
-                self.logger.info("Metadata-only extraction requested; skipping audio download")
-            elif duration and duration > self.max_audio_duration:
-                self.logger.warning(
-                    f"Video duration ({duration}s) exceeds limit ({self.max_audio_duration}s)"
-                )
-                # Return without an audio path; the caller decides how to report the skip.
-            else:
-                download_result = await self._download_audio(url, info)
-                if download_result:
-                    audio_path, _ = download_result
-
             return ExtractionData(
                 url=url,
                 title=info.get("title") or "Unknown Title",
                 description=info.get("description") or "",
                 author=info.get("uploader") or "Unknown Author",
-                duration=duration,
+                duration=info.get("duration") or 0,
                 published_at=self._parse_upload_date(info.get("upload_date") or ""),
                 metadata={
                     "platform": info.get("extractor") or "unknown",
@@ -136,23 +117,53 @@ class YtDlpExtractor(VideoExtractor, LoggerMixin):
                     "like_count": info.get("like_count") or 0,
                     "video_id": info.get("id") or "",
                 },
-                audio_path=audio_path,
+                audio_path=None,
             )
 
+        except VideoScrapingError:
+            raise
         except Exception as e:
             self.logger.error(f"yt-dlp processing failed for {url}: {e}")
             raise VideoScrapingError(f"yt-dlp processing failed: {e}") from e
 
-    async def _download_audio(self, url: str, info: Dict[str, Any]) -> Optional[tuple[Path, str]]:
-        """Download audio from video and return path and video ID."""
+    def _extract_info(self, url: str) -> Optional[Dict[str, Any]]:
+        """Run yt-dlp's blocking metadata resolution."""
+        with yt_dlp.YoutubeDL(self.yt_dlp_opts) as ydl:
+            return ydl.extract_info(url, download=False)
+
+    async def fetch_audio(
+        self,
+        url: str,
+        *,
+        video_id: Optional[str] = None,
+        duration: Optional[float] = None,
+    ) -> Optional[Path]:
+        """Download the audio track for ``url``.
+
+        ``video_id`` and ``duration`` come from an earlier :meth:`extract_metadata`
+        call -- or from its cached artifact -- so a caller that already resolved the
+        video does not pay for a second metadata round trip.
+        """
+        if duration and duration > self.max_audio_duration:
+            self.logger.warning(
+                f"Video duration ({duration}s) exceeds limit ({self.max_audio_duration}s)"
+            )
+            # Return without an audio path; the caller decides how to report the skip.
+            return None
+
+        return await self._download_audio(
+            url, video_id or hashlib.md5(url.encode()).hexdigest()[:8]
+        )
+
+    async def _download_audio(self, url: str, video_id: str) -> Optional[Path]:
+        """Download audio for ``video_id`` and return the path to the mp3."""
         try:
-            video_id = info.get("id") or hashlib.md5(url.encode()).hexdigest()[:8]
             audio_path = self.temp_dir / f"{video_id}.mp3"
 
             # Skip if already cached/exists in temp
             if audio_path.exists():
                 self.logger.info(f"Using cached audio: {audio_path}")
-                return audio_path, video_id
+                return audio_path
 
             opts = self.yt_dlp_opts.copy()
             opts["outtmpl"] = str(self.temp_dir / f"{video_id}.%(ext)s")
@@ -164,33 +175,34 @@ class YtDlpExtractor(VideoExtractor, LoggerMixin):
                 }
             ]
 
-            try:
-                self.logger.info(f"Downloading audio from video content")
-                with yt_dlp.YoutubeDL(opts) as ydl:
-                    ydl.download([url])
-                self.logger.info(f"Download completed for video content")
-            except Exception as e:
-                self.logger.error(f"Download failed: {e}", exc_info=True)
-                raise
+            self.logger.info("Downloading audio from video content")
+            await asyncio.to_thread(self._download, opts, url)
+            self.logger.info("Download completed for video content")
 
             # Find the downloaded file (extension might vary)
             for ext in ["mp3", "webm", "m4a", "wav"]:
                 potential_path = self.temp_dir / f"{video_id}.{ext}"
-                if potential_path.exists():
-                    if ext != "mp3":
-                        # Convert to mp3 using pydub
-                        audio = AudioSegment.from_file(str(potential_path))
-                        audio.export(
-                            str(audio_path), format="mp3", parameters=["-ac", "1", "-ar", "16000"]
-                        )
-                        potential_path.unlink()  # Remove original
-                    else:
-                        audio_path = potential_path
-                    return audio_path, video_id
+                if not potential_path.exists():
+                    continue
+                if ext == "mp3":
+                    return potential_path
+                await asyncio.to_thread(self._convert_to_mp3, potential_path, audio_path)
+                return audio_path
 
             self.logger.warning(f"No audio file found after download for {url}")
             return None
 
         except Exception as e:
-            self.logger.error(f"Audio download failed for {url}: {e}")
+            self.logger.error(f"Audio download failed for {url}: {e}", exc_info=True)
             return None
+
+    def _download(self, opts: Dict[str, Any], url: str) -> None:
+        """Run yt-dlp's blocking download."""
+        with yt_dlp.YoutubeDL(opts) as ydl:
+            ydl.download([url])
+
+    def _convert_to_mp3(self, source: Path, target: Path) -> None:
+        """Transcode ``source`` to a mono 16 kHz mp3 at ``target``, dropping the original."""
+        audio = AudioSegment.from_file(str(source))
+        audio.export(str(target), format="mp3", parameters=["-ac", "1", "-ar", "16000"])
+        source.unlink()

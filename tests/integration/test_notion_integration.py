@@ -5,10 +5,7 @@ works correctly with the actual Notion API. These tests require
 valid Notion API credentials and should be run in a test environment.
 """
 
-import asyncio
-import json
-from datetime import datetime
-from unittest.mock import AsyncMock, patch
+from unittest.mock import patch
 
 import httpx
 import pytest
@@ -16,8 +13,7 @@ from notion_client.errors import APIResponseError
 
 from webtonotion.config.settings import Settings
 from webtonotion.exceptions import NotionAPIError, NotionAuthenticationError
-from webtonotion.models.notion import NotionDatabase, NotionPagePayload
-from webtonotion.models.video import VideoContent
+from webtonotion.models.notion import NotionDatabase
 from webtonotion.services.notion_service import NotionService
 
 
@@ -99,80 +95,7 @@ class TestNotionServiceIntegration:
         except NotionAPIError as e:
             pytest.skip(f"API error during properties retrieval: {str(e)}")
 
-    @pytest.mark.asyncio
-    async def test_create_video_page_flow(self, notion_service):
-        """Test the full video page creation flow with mocked agent but real Notion API."""
-        try:
-            # 1. Get real databases
-            databases = await notion_service.get_databases()
-            if not databases:
-                pytest.skip("No databases available for integration test")
-
-            test_db = databases[0]
-
-            # 2. Get real properties to identify the title field
-            properties = await notion_service.get_database_properties(test_db.id)
-
-            # Find the title property (required for creating a page)
-            title_prop = next((k for k, v in properties.items() if v.get("type") == "title"), None)
-
-            if not title_prop:
-                pytest.skip(
-                    f"Database {test_db.id} has no title property, cannot test page creation"
-                )
-
-            # 3. Create a valid payload using the real title property name
-            mock_payload = NotionPagePayload(
-                parent={"database_id": test_db.id},
-                properties={
-                    title_prop: {"title": [{"text": {"content": "Integration Test Video"}}]}
-                },
-                children=[
-                    {
-                        "object": "block",
-                        "type": "paragraph",
-                        "paragraph": {
-                            "rich_text": [
-                                {
-                                    "type": "text",
-                                    "text": {"content": "Created via integration test"},
-                                }
-                            ]
-                        },
-                    }
-                ],
-            )
-
-            mock_agent_result = AsyncMock()
-            mock_agent_result.output = mock_payload
-
-            video_content = VideoContent(
-                url="https://example.com",
-                title="Integration Test",
-                author="Test",
-                duration=100,
-                transcript="Test",
-            )
-
-            # Patch the agent to avoid LLM calls
-            with patch(
-                "webtonotion.services.notion_service.notion_mapper_agent.run",
-                new_callable=AsyncMock,
-            ) as mock_run:
-                mock_run.return_value = mock_agent_result
-
-                # Execute the service method
-                # This tests: get_database_properties (Real) -> Agent (Mocked) -> create_page (Real)
-                result = await notion_service.create_video_page(test_db.id, video_content)
-
-                assert result.success is True
-                assert result.id is not None
-
-                # Optional: Verify the page was actually created if we wanted to be thorough,
-                # but result.success=True from the API client is usually enough.
-
-        except NotionAPIError as e:
-            pytest.skip(f"API error during integration test: {e}")
+    # create_video_page retired in PR 3; the write path is agents/writer.py::write_video_page (see tests/unit/test_notion_writer.py)
 
 
 @pytest.mark.integration

@@ -27,26 +27,29 @@ FastAPI application that processes video URLs (YouTube, Vimeo, Facebook, Instagr
 
 - `src/webtonotion/api`: FastAPI routers (`process.py`, `health.py`), middleware (security headers, error handling, request logging, content-length).
 - `src/webtonotion/config`: `settings.py` (pydantic-settings, loads `.env`) and `logging.py` (structured logging + Logfire setup).
-- `src/webtonotion/models`: Pydantic models — `video.py` (`VideoContent`), `notion.py` (Notion payloads/responses), `request.py` (API inputs).
+- `src/webtonotion/models`: Pydantic models — `video.py` (`VideoPageContent`), `notion.py` (Notion payloads/responses), `chat.py` (`SaveResult`, chat/tool models), `request.py` (API inputs).
 - `src/webtonotion/services`: business logic, organized by concern:
   - `services/extraction/`: `YtDlpExtractor` — primary video metadata/audio extraction.
-  - `services/analysis/`: `AudioTranscriber` (Whisper), `ContentAnalyzer` (PydanticAI topic/sentiment/location extraction), `notion_mapper.py` (maps `VideoContent` to Notion database schema/properties).
-  - `services/storage/`: `FileCacheService` — caches processed video content to avoid reprocessing.
-  - `video_scraping_service.py`: orchestrates the above (extract → transcribe → analyze) into a `VideoContent`.
-  - `notion_service.py`: Notion API client wrapper (fetches DB schema, creates pages).
+  - `services/analysis/`: `AudioTranscriber` (Whisper) and `notion_mapper.py` (`build_mapper_agent(settings)` — a lazy factory; maps title/description/summary/transcript onto a Notion payload). There is no `ContentAnalyzer` — `topics`/`sentiment`/`locations` were removed, not replaced.
+  - `services/storage/`: `FileCacheService` — caches the `metadata` artifact (title/author, transcript, cached summaries) per video.
+  - `video_scraping_service.py`: exposes `is_video_url`, `fetch_metadata`, `fetch_transcript`, `store_summary` — independently callable, independently cached. No `process_video`/`analyze_content`.
+  - `notion_service.py`: pure Notion API client (`get_databases`, `create_page`, `get_database_properties`, `health_check`) — no mapper or video-model imports.
+- `src/webtonotion/agents`: multi-turn orchestrator, its tools/session store, and `writer.py` — `build_page_content` + `write_video_page`, the single Notion write path shared by `/process/url` and the chat `save_to_notion` tool.
 - `src/webtonotion/dependencies.py`: FastAPI DI providers — settings (`lru_cache`d), service constructors, API key auth (`verify_api_key`, constant-time compare via `X-API-Key` header), per-IP rate limiting.
 - `src/webtonotion/utils/rate_limiter.py`: `RateLimiter` used by the rate-limit dependency.
 - `tests/`: `tests/unit/` (mocked, run locally) vs `tests/integration/` (hit live external endpoints). `tests/conftest.py` auto-tags tests with `integration`/`slow`/`requires_api_keys`/`requires_internet` markers based on path/name.
-- Dependency flow is one-directional: `api` → `services` → `models` & `config`. Services/models must never import from `api` or `main.py`.
+- Dependency flow is one-directional: `api` → `agents` → `services` → `models` & `config`. `agents/` may import `services/`, never the reverse; `services`/`models` never import from `api`, `agents`, or `main.py`.
 
 ### Request flow (`POST /api/v1/process/url`)
 
 1. `verify_api_key` + rate-limit dependency run first (registered on the router in `main.py`, not per-endpoint).
 2. `_validate_request_and_get_db_schema`: fetches Notion DB schema, confirms URL is a supported video URL.
-3. `VideoScrapingService.process_video`: yt-dlp extraction → Whisper transcription → PydanticAI content analysis → `VideoContent`.
-4. `NotionService.create_video_page`: maps `VideoContent` onto the target database's schema and creates the page.
+3. `agents/writer.build_page_content`: `VideoScrapingService.fetch_metadata` (→ 422 on failure) + a tolerant `fetch_transcript` (logged and swallowed) → `VideoPageContent` plus any cached summary.
+4. `agents/writer.write_video_page`: runs `build_mapper_agent(settings)` against the DB schema, drops empty property values, calls `NotionService.create_page` → `SaveResult`.
 
-Errors are caught by type (`VideoScrapingError`, `NotionAuthenticationError`, `NotionAPIError`, `WebToNotionError`) and translated to specific HTTP status codes in `api/process.py`.
+The chat `save_to_notion` tool calls the same two `agents/writer` functions once the session's write gate is open — one write path, not two.
+
+Errors are caught by type (`VideoScrapingError` → 422, `NotionAuthenticationError` → 401, `NotionAPIError` → 503, `ContentProcessingError`/`WebToNotionError` → 500) and translated in `api/process.py`. A Notion-mapping failure is now a 500 (`ContentProcessingError`), not the misleading 503 it was before.
 
 ## Code patterns
 

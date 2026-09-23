@@ -1,10 +1,9 @@
 """File-based caching service, keyed per artifact.
 
-Cache entries are keyed ``(url_hash, artifact)`` rather than one whole-``VideoContent``
-blob, where artifact is one of ``metadata``, ``analysis``, ``summary:<style>:<length>``,
-or ``content`` (the legacy whole-blob entry the fixed pipeline still uses). Each is
-written the moment it is produced, so a failure in a later stage never discards an
-earlier stage's expensive output.
+Cache entries are keyed ``(url_hash, artifact)``, where artifact is one of
+``metadata`` (transcript + summaries), ``analysis``, or ``summary:<style>:<length>``.
+Each is written the moment it is produced, so a failure in a later stage never
+discards an earlier stage's expensive output.
 
 The ``metadata`` artifact carries the video's transcript (and its cached summaries)
 alongside title/author, so it expires on ``transcript_ttl`` — the transcript is
@@ -26,13 +25,9 @@ from typing import Any, Optional
 
 from webtonotion.config.logging import LoggerMixin
 from webtonotion.config.settings import settings
-from webtonotion.models.video import VideoContent
 
 # Artifact names are used as filename components; anything outside this set is replaced.
 _UNSAFE_IN_FILENAME = re.compile(r"[^A-Za-z0-9._-]+")
-
-# Artifact name for the legacy whole-VideoContent blob.
-_CONTENT_ARTIFACT = "content"
 
 # Artifact holding the video's immutable transcript + metadata + cached summaries.
 _METADATA_ARTIFACT = "metadata"
@@ -156,18 +151,3 @@ class FileCacheService(LoggerMixin):
             self.logger.info(f"Cached artifact '{artifact}' for URL: {url}")
         except Exception as e:
             self.logger.warning(f"Failed to cache artifact '{artifact}': {e}")
-
-    async def get_cached_content(self, url: str) -> Optional[VideoContent]:
-        """Retrieve the cached whole-``VideoContent`` blob, if present and fresh."""
-        data = await self.get_artifact(url, _CONTENT_ARTIFACT)
-        if data is None:
-            return None
-        try:
-            return VideoContent(**data)
-        except Exception as e:
-            self.logger.warning(f"Failed to parse cached content: {e}")
-            return None
-
-    async def cache_content(self, url: str, content: VideoContent) -> None:
-        """Cache the whole ``VideoContent`` blob."""
-        await self.put_artifact(url, _CONTENT_ARTIFACT, content.model_dump())

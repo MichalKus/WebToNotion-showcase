@@ -112,3 +112,36 @@ async def test_validate_notion_payload_wrong_property_type():
 
     with pytest.raises(ModelRetry, match="Expected key 'title'"):
         await validate_notion_payload(ctx, payload)
+
+
+def test_notion_mapper_builds_no_agent_at_import():
+    """The module must not construct an Agent or OpenRouter model at import time.
+
+    Mirrors ``tests/unit/test_orchestrator_import_safe.py``: building an
+    ``OpenRouterModel`` at module scope needs a key and previously broke CI.
+    ``build_mapper_agent`` defers construction to call time, so the module must
+    expose neither ``notion_mapper_agent`` nor ``model`` after import.
+    """
+    env = os.environ.copy()
+    env["OPENROUTER_API_KEY"] = ""
+    code = (
+        "import webtonotion.services.analysis.notion_mapper as m; "
+        "assert not hasattr(m, 'notion_mapper_agent'), 'notion_mapper_agent built at import'; "
+        "assert not hasattr(m, 'model'), 'model built at import'"
+    )
+    result = subprocess.run(
+        [sys.executable, "-c", code],
+        env=env,
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode == 0, result.stderr
+
+
+def test_build_mapper_agent_is_cached():
+    """Two builds with the same settings return the same cached agent."""
+    from webtonotion.config.settings import Settings
+    from webtonotion.services.analysis.notion_mapper import build_mapper_agent
+
+    test_settings = Settings(notion_api_key="test_key")
+    assert build_mapper_agent(test_settings) is build_mapper_agent(test_settings)

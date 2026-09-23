@@ -11,10 +11,20 @@ from webtonotion.agents.tools.notion import (
     inspect_schema,
     save_to_notion,
 )
+from webtonotion.agents.tools.video import (
+    ask_about_video,
+    get_transcript,
+    get_video_metadata,
+    summarize,
+)
 
 __all__ = [
     "find_databases",
     "inspect_schema",
     "confirm_database",
     "save_to_notion",
+    "get_video_metadata",
+    "get_transcript",
+    "summarize",
+    "ask_about_video",
 ]

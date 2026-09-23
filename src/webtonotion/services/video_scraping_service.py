@@ -1,22 +1,17 @@
 """Video scraping service for extracting content from video URLs.
 
-The pipeline is decomposed into three independently callable, independently cached
-stages -- metadata, transcript, analysis -- because the agentic flow needs them one at
+The service exposes three independently callable, independently cached stages --
+metadata, transcript, and summary-store -- because the agentic flow needs them one at
 a time (answering "what is this video?" must not download audio) and because each
-must be cached the moment it succeeds. Caching only the final assembled blob meant a
-failure in the cheap analysis step discarded the expensive Whisper run.
+must be cached the moment it succeeds.
 
 The transcript is persisted *inside* the ``metadata`` cache artifact -- one file per
 video holds its title/author, its cached summaries, and its transcript -- because none
 of that goes stale and re-running Whisper is the most expensive operation here. The
 ``metadata`` artifact therefore keeps the long ``transcript_ttl`` (see
 ``services/storage/file_cache.py``).
-
-``process_video`` composes the three into the ``VideoContent`` the fixed
-``POST /api/v1/process/url`` endpoint returns; its observable behaviour is unchanged.
 """
 
-import json
 from typing import Any, Optional
 
 from pydantic import HttpUrl
@@ -24,8 +19,6 @@ from pydantic import HttpUrl
 from webtonotion.config.logging import LoggerMixin
 from webtonotion.exceptions import VideoScrapingError
 from webtonotion.models.transcript import StoredTranscript
-from webtonotion.models.video import ContentAnalysisResult, VideoContent
-from webtonotion.services.analysis.content_analyzer import ContentAnalyzer
 from webtonotion.services.analysis.transcriber import AudioTranscriber
 from webtonotion.services.extraction.base import ExtractionData
 from webtonotion.services.extraction.ytdlp_extractor import YtDlpExtractor
@@ -33,7 +26,7 @@ from webtonotion.services.storage.file_cache import FileCacheService
 
 
 class VideoScrapingService(LoggerMixin):
-    """Extracts, transcribes, and analyses video content, stage by stage."""
+    """Extracts and transcribes video content, one cached stage at a time."""
 
     # Supported video platforms
     VIDEO_PLATFORM_PATTERNS = [
@@ -55,9 +48,8 @@ class VideoScrapingService(LoggerMixin):
         self.file_cache = FileCacheService()
         self.ytdlp_extractor = YtDlpExtractor()
         self.transcriber = AudioTranscriber()
-        self.analyzer = ContentAnalyzer()
 
-    async def is_video_url(self, url: HttpUrl) -> bool:
+    async def is_video_url(self, url: "HttpUrl | str") -> bool:
         """Check if the provided URL is from a supported video platform."""
         url_str = str(url).lower()
 
@@ -92,7 +84,7 @@ class VideoScrapingService(LoggerMixin):
                 except Exception:  # noqa: BLE001 - unreadable entry, fall through and re-extract
                     pass
 
-            extraction_data = await self.ytdlp_extractor.extract(url, download_audio=False)
+            extraction_data = await self.ytdlp_extractor.extract_metadata(url)
             await self._write_metadata_merged(url, extraction_data.model_dump(mode="json"))
             return extraction_data
 
@@ -129,7 +121,9 @@ class VideoScrapingService(LoggerMixin):
 
         The transcript lives in the ``metadata`` artifact and is written the instant
         transcription succeeds -- before any analysis or summarization runs -- so a
-        later failure never costs a second Whisper call.
+        later failure never costs a second Whisper call. Metadata already on that
+        artifact is reused rather than re-resolved, so a turn that asked about the
+        video first does not pay for a second yt-dlp round trip here.
 
         Raises:
             VideoScrapingError: If the video has no usable audio track.
@@ -151,15 +145,33 @@ class VideoScrapingService(LoggerMixin):
                 self.logger.info(f"Reusing stored transcript for URL: {url}")
                 return stored
 
-            extraction_data = await self.ytdlp_extractor.extract(url, download_audio=True)
-            if not extraction_data.audio_path or not extraction_data.audio_path.exists():
+            extraction_data = self._extraction_from_meta(meta)
+            if extraction_data is None:
+                extraction_data = await self.ytdlp_extractor.extract_metadata(url)
+
+            audio_path = await self.ytdlp_extractor.fetch_audio(
+                url,
+                video_id=str(extraction_data.metadata.get("video_id") or ""),
+                duration=extraction_data.duration,
+            )
+            if audio_path is None or not audio_path.exists():
                 raise VideoScrapingError(
                     "No audio track is available for this video, so it cannot be transcribed."
                 )
 
-            transcript = await self.transcriber.transcribe(extraction_data.audio_path)
+            transcript = await self.transcriber.transcribe(audio_path)
             await self._persist_transcript(url, transcript, extraction_data)
             return transcript
+
+    @staticmethod
+    def _extraction_from_meta(meta: Optional[dict[str, Any]]) -> Optional[ExtractionData]:
+        """Reconstruct already-resolved metadata from a cached ``metadata`` artifact."""
+        if not meta:
+            return None
+        try:
+            return ExtractionData(**meta)
+        except Exception:  # noqa: BLE001 - a corrupt cache entry is a miss, not an error
+            return None
 
     @staticmethod
     def _transcript_from_meta(meta: Optional[dict[str, Any]]) -> Optional[StoredTranscript]:
@@ -186,121 +198,3 @@ class VideoScrapingService(LoggerMixin):
         updates = extraction_data.model_dump(mode="json")
         updates["transcript"] = transcript.model_dump(mode="json")
         await self._write_metadata_merged(url, updates)
-
-    async def analyze_content(
-        self, url: str, extraction_data: ExtractionData, transcript_text: str
-    ) -> ContentAnalysisResult:
-        """Run topic/sentiment/location analysis, cached under the ``analysis`` artifact."""
-        cached = await self.file_cache.get_artifact(url, "analysis")
-        if cached is not None:
-            try:
-                return ContentAnalysisResult(**cached)
-            except Exception as e:
-                self.logger.warning(f"Cached analysis for {url} is unreadable: {e}")
-
-        info_for_analysis = {
-            "title": extraction_data.title,
-            "description": extraction_data.description,
-            "extractor": extraction_data.metadata.get("platform", "unknown"),
-        }
-        analyzed = await self.analyzer.analyze(info_for_analysis, transcript_text)
-        await self.file_cache.put_artifact(url, "analysis", analyzed.model_dump(mode="json"))
-        return analyzed
-
-    async def process_video(self, url: HttpUrl) -> VideoContent:
-        """Process a video URL and extract comprehensive content.
-
-        Composition of the three stages above, preserving the exact behaviour the
-        fixed ``/process/url`` endpoint depends on -- including that a transcription
-        failure is non-fatal and simply leaves the transcript empty.
-
-        Raises:
-            VideoScrapingError: If video processing fails.
-        """
-        url_str = str(url)
-        self.logger.info(f"Starting video processing for URL: {url_str}")
-
-        try:
-            cached_content = await self.file_cache.get_cached_content(url_str)
-            if cached_content:
-                return cached_content
-
-            self.logger.info(f"Attempting yt-dlp extraction for URL: {url_str}")
-            extraction_data = await self.ytdlp_extractor.extract(url_str, download_audio=True)
-            self.logger.info(f"Successfully extracted content with yt-dlp for URL: {url_str}")
-
-            transcript_text = await self._transcribe_if_possible(url_str, extraction_data)
-
-            analyzed_content = await self.analyze_content(url_str, extraction_data, transcript_text)
-
-            video_content = VideoContent(
-                url=url,
-                title=extraction_data.title,
-                description=extraction_data.description,
-                author=extraction_data.author,
-                duration=extraction_data.duration,
-                published_at=extraction_data.published_at,
-                transcript=transcript_text,
-                topics=analyzed_content.topics,
-                sentiment=analyzed_content.sentiment,
-                locations=analyzed_content.locations,
-                metadata={
-                    **extraction_data.metadata,
-                    "key_insights": json.dumps(analyzed_content.key_insights),
-                    "content_category": analyzed_content.content_category,
-                    **(
-                        {"skipped_transcription": "duration_exceeded"}
-                        if (
-                            extraction_data.duration
-                            and extraction_data.duration > self.ytdlp_extractor.max_audio_duration
-                            and not transcript_text
-                        )
-                        else {}
-                    ),
-                },
-            )
-
-            await self.file_cache.cache_content(url_str, video_content)
-            return video_content
-
-        except Exception as e:
-            self.logger.error(f"Video processing failed for URL {url_str}: {e}", exc_info=True)
-            raise VideoScrapingError(f"Failed to process video: {e}") from e
-
-    async def _transcribe_if_possible(self, url: str, extraction_data: ExtractionData) -> str:
-        """Transcribe the extracted audio, returning "" rather than failing the request.
-
-        A transcription error is non-fatal here by design (pinned by the
-        characterization tests): a video whose audio Whisper choked on still yields a
-        page from its metadata. Persisting the transcript and writing the debug
-        transcript file are both best-effort once transcription itself has succeeded --
-        matching the pre-refactor behavior, where a downstream write failure after a
-        successful transcription was logged but never discarded the already-obtained
-        transcript or failed the request.
-        """
-        if not extraction_data.audio_path or not extraction_data.audio_path.exists():
-            return ""
-
-        try:
-            transcript = await self.transcriber.transcribe(extraction_data.audio_path)
-        except Exception as e:
-            self.logger.warning(f"Transcription failed for {url}: {e}")
-            # Audio path cleanup is handled by transcriber on error.
-            return ""
-
-        try:
-            async with self.file_cache.artifact_lock(url, "metadata"):
-                await self._persist_transcript(url, transcript, extraction_data)
-        except Exception as e:
-            self.logger.warning(f"Failed to persist transcript for {url}: {e}")
-
-        video_id = extraction_data.metadata.get("video_id")
-        if video_id:
-            try:
-                transcript_file = self.transcriber.temp_dir / f"{video_id}_transcript.txt"
-                transcript_file.write_text(transcript.text, encoding="utf-8")
-                self.logger.debug(f"Saved transcription to {transcript_file}")
-            except Exception as e:
-                self.logger.warning(f"Failed to write transcript debug file for {url}: {e}")
-
-        return transcript.text

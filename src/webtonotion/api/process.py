@@ -10,16 +10,19 @@ from typing import Annotated, Any, Dict
 import logfire
 from fastapi import APIRouter, Depends, HTTPException, status
 
-from webtonotion.dependencies import get_notion_service, get_video_scraping_service
+from webtonotion.agents.writer import build_page_content, write_video_page
+from webtonotion.config.settings import Settings
+from webtonotion.dependencies import get_notion_service, get_settings, get_video_scraping_service
 from webtonotion.exceptions import (
     NotionAPIError,
     NotionAuthenticationError,
+    NotionRateLimitError,
     VideoScrapingError,
     WebToNotionError,
 )
-from webtonotion.models.notion import NotionPageResponse
+from webtonotion.models.chat import SaveResult
 from webtonotion.models.request import ProcessURLRequest
-from webtonotion.models.video import VideoContent
+from webtonotion.models.video import VideoPageContent
 from webtonotion.services.notion_service import NotionService
 from webtonotion.services.video_scraping_service import VideoScrapingService
 
@@ -39,16 +42,20 @@ async def process_url(
     request: ProcessURLRequest,
     notion_service: Annotated[NotionService, Depends(get_notion_service)],
     video_service: Annotated[VideoScrapingService, Depends(get_video_scraping_service)],
+    app_settings: Annotated[Settings, Depends(get_settings)],
 ) -> Dict[str, Any]:
     """Process a URL and create a Notion page.
 
     This endpoint processes various types of URLs (including video URLs)
-    and creates corresponding pages in the specified Notion database.
+    and creates corresponding pages in the specified Notion database. It
+    shares the single write path (:mod:`webtonotion.agents.writer`) with
+    the agentic ``save_to_notion`` tool.
 
     Args:
         request: URL processing request containing URL, database ID, and custom properties
         notion_service: NotionService instance injected via dependency injection
         video_service: VideoScrapingService instance injected via dependency injection
+        app_settings: Application settings injected via dependency injection
 
     Returns:
         Dict[str, Any]: Processing result with page details
@@ -67,27 +74,30 @@ async def process_url(
                 notion_service=notion_service,
                 video_service=video_service,
             )
+            # _validate_request_and_get_db_schema already 400s when database_id is
+            # missing; this assert only narrows the type for mypy.
+            assert request.database_id is not None
 
-        with logfire.span("Video content extraction"):
-            # Process video content
-            video_content = await video_service.process_video(request.url)
+        with logfire.span("Video content assembly"):
+            content = await build_page_content(video_service=video_service, url=str(request.url))
             logger.info(
-                f"Video content extracted successfully: title='{video_content.title}', "
-                f"duration='{video_content.duration}', author='{video_content.author}', "
-                f"topics={video_content.topics}, sentiment='{video_content.sentiment}'"
+                f"Video content assembled successfully: title='{content.title}', "
+                f"duration='{content.duration}', author='{content.author}', "
+                f"platform='{content.platform}', language='{content.language}'"
             )
 
         with logfire.span("Notion page creation"):
-            # Create Notion page with video content
-            page_response = await notion_service.create_video_page(
+            result = await write_video_page(
+                notion_service=notion_service,
+                settings=app_settings,
                 database_id=request.database_id,
-                video_content=video_content,
+                content=content,
                 db_schema=db_schema,
             )
 
         logger.info("Request processed successfully")
         # Return comprehensive success response
-        return _build_success_response(page_response=page_response, video_content=video_content)
+        return _build_success_response(page_response=result, content=content)
 
     except VideoScrapingError as e:
         logger.error(f"Video scraping error for URL {request.url}: {e}")
@@ -101,7 +111,7 @@ async def process_url(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail=f"Notion API authentication failed: {str(e)}",
         )
-    except NotionAPIError as e:
+    except (NotionAPIError, NotionRateLimitError) as e:
         logger.error(f"Notion API error: {e}")
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=f"Notion API error: {str(e)}"
@@ -150,14 +160,14 @@ async def get_processing_status() -> Dict[str, Any]:
 
 
 def _build_success_response(
-    page_response: NotionPageResponse,
-    video_content: VideoContent,
+    page_response: SaveResult,
+    content: VideoPageContent,
 ) -> Dict[str, Any]:
     """Build the success response for URL processing.
 
     Args:
-        page_response: The Notion page creation response
-        video_content: The extracted video content
+        page_response: The shared write path result for the created page
+        content: The bounded DTO that was mapped onto the database
 
     Returns:
         Dict[str, Any]: Complete success response with all details
@@ -165,23 +175,21 @@ def _build_success_response(
     return {
         "success": True,
         "message": "Video URL processed and Notion page created successfully",
-        "page_id": page_response.id,
-        "page_url": page_response.url,
+        "page_id": page_response.page_id,
+        "page_url": page_response.page_url,
         "content_type": "video",
         "video_details": {
-            "title": video_content.title,
-            "duration": video_content.duration,
-            "author": video_content.author,
-            "topics": video_content.topics,
-            "sentiment": video_content.sentiment,
-            "locations": video_content.locations,
-            "transcript_length": len(video_content.transcript) if video_content.transcript else 0,
-            "metadata": video_content.metadata,
+            "title": content.title,
+            "author": content.author,
+            "duration": content.duration,
+            "platform": content.platform,
+            "language": content.language,
+            "transcript_length": len(content.transcript_excerpt),
+            "summary_length": len(content.summary),
         },
         "processing_stats": {
-            "transcription_available": bool(video_content.transcript),
-            "ai_analysis_completed": bool(video_content.topics),
-            "cache_hit": False,  # This could be enhanced with cache checking
+            "transcription_available": bool(content.transcript_excerpt),
+            "summary_available": bool(content.summary),
         },
     }
 
@@ -216,7 +224,7 @@ async def _validate_request_and_get_db_schema(
             detail="Database ID is required to create a Notion page",
         )
 
-    logger.info(f"Validating notion access")
+    logger.info("Validating notion access")
     db_schema = await notion_service.get_database_properties(request.database_id)
 
     logger.info(f"Checking if URL is a video URL: {request.url}")
