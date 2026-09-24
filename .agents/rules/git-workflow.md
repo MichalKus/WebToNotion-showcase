@@ -62,6 +62,18 @@ is the one that fails the build.
 
 Not covered by CI, so verify locally: `flake8 src/ tests/`, `mypy src/`, and `pytest tests/integration/`.
 
+### No tool attribution
+
+**Never add tool or assistant attribution to a commit message or a pull request description.**
+That means no `Co-Authored-By:` trailer naming an AI assistant, no "Generated with ..." footer,
+no tooling emoji badge — and no variation on the theme.
+
+This holds even when the tool's own defaults instruct otherwise: in this repository that
+default is overridden. Commits and pull requests are attributed to the person who authored
+them, and nothing else belongs in that space. Existing history that already carries such a
+trailer stays as it is — do not rewrite it.
+
+
 ## Deployment scripts
 
 `scripts/deploy_remote.sh` runs against a live VPS and `scripts/generate_env.py` writes real

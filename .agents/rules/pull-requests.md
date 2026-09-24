@@ -55,3 +55,6 @@ docs updated, follow-up work.
 
 Be specific: "fixed a bug" tells a reviewer nothing — name the failure and the cause.
 Emojis are optional; information is not.
+
+No tool or assistant attribution in the title or the description — no "Generated with ..."
+footer, no badge. See "No tool attribution" in the git-workflow rule.
