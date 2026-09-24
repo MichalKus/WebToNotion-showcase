@@ -254,7 +254,7 @@ The health router is mounted without those dependencies, so `/health/`, `/health
 
 | Service | Used for | Config |
 |---|---|---|
-| yt-dlp | Video metadata + audio download | `COOKIES_FILE_PATH`, `MAX_FILE_SIZE`, `MAX_VIDEO_DURATION` |
+| yt-dlp | Video metadata + audio download (fast/full profiles — see [video-processing.md](video-processing.md#fast-and-full-profiles)) | `COOKIES_FILE_PATH`, `MAX_FILE_SIZE`, `MAX_VIDEO_DURATION`, `AUDIO_QUALITY` |
 | Groq | Whisper audio transcription | `WHISPER_API_KEY`, `WHISPER_MODEL` |
 | OpenRouter | Notion mapping and the chat orchestrator / sub-agents | `OPENROUTER_API_KEY`, `OPENROUTER_MODEL` |
 | Notion | Schema fetch + page creation | `NOTION_API_KEY`, `NOTION_VERSION` |

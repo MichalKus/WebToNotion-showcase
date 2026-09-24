@@ -52,23 +52,122 @@ run instead.
 
 ## Extraction (yt-dlp)
 
-`YtDlpExtractor.extract` runs `extract_info(download=False)` first to get metadata, then
-downloads audio in a second pass.
+`YtDlpExtractor` has two passes: `extract_metadata` runs `extract_info(download=False)`,
+and `fetch_audio` downloads the audio track. The second pass reuses the first pass's result
+instead of extracting again (see [Resolved-info cache](#resolved-info-cache)).
 
 Metadata captured into `ExtractionData`: title, description, uploader, duration, upload
 date, plus `platform`, `view_count`, `like_count`, and `video_id` in `metadata`.
 
-Notable yt-dlp options (`ytdlp_extractor.py`):
+On a typical 4-minute YouTube video, metadata takes ~1.7 s and the audio pass ~2.5 s
+(download plus mp3 transcode).
+
+### Fast and full profiles
+
+Extraction tries a **fast** profile first and falls back to a **full** one if the fast one
+raises:
+
+| Profile | YouTube clients | Watch page | Cookies | Why |
+|---|---|---|---|---|
+| fast | `android` | skipped (`player_skip: webpage`) | never | ~1.5 s; `android` needs no JS player |
+| full | `android`, `web` | fetched | `COOKIES_FILE_PATH` if set | Age gates, login-gated content on any platform, clearer errors |
+
+**Why `android`.** Without a PO Token (YouTube's anti-bot attestation — see the
+[yt-dlp PO Token guide](https://github.com/yt-dlp/yt-dlp/wiki/PO-Token-Guide)), `android`
+is the only client that serves a downloadable format: itag 18, a 360p muxed mp4 with
+`ratebypass=yes`, so it downloads at full speed. As of yt-dlp 2026.08:
+
+- `android` and `android_vr` still *list* audio-only formats (139/140/249/251), but
+  downloading them returns HTTP 403.
+- `mweb` needs a GVS PO Token and is skipped.
+- `web` is SABR-only: it returns no plain stream URLs.
+
+So audio comes from itag 18 (~10 MB for 4 minutes, ~165 MB for an hour, most of it video)
+and is transcoded to mp3. Getting audio-only downloads would need a PO Token provider
+plugin (e.g. `bgutil-ytdlp-pot-provider`). That isn't set up — revisit it if itag 18 starts
+returning 403 or disappears.
+
+**Why the fast profile never sends cookies.** Once a cookies file authenticates the
+session, yt-dlp drops every client that doesn't support cookies — `android` included — and
+only SABR-only `web` is left, so nothing can be downloaded. Cookies are therefore used only
+in the full profile. In practice they help with other platforms and with metadata for
+gated YouTube videos, **not** with downloading YouTube audio.
+
+### Options
+
+Notable yt-dlp options (`YtDlpExtractor._build_opts`):
 
 | Option | Source | Effect |
 |---|---|---|
-| `format` | fixed | `bestaudio/best` |
+| `format` | fixed | `bestaudio/best[height<=480]/best` — audio-only where offered, else a small muxed file rather than HD video |
+| `noplaylist` | fixed | A watch URL with `&list=…` (from a playlist or mix) resolves to the single video |
+| `extract_flat` | fixed | `in_playlist` — a bare playlist URL is rejected without resolving every entry |
+| `ignoreerrors` / `ignore_no_formats_error` | fixed | Both `False`, so errors raise with their real cause (see below) |
+| `logger` | fixed | yt-dlp output goes to the app logger, not stdout; `quiet` and `noprogress` are on |
+| `verbose` | `VERBOSE_LOGGING` | Adds yt-dlp's `[debug]` lines (logged at DEBUG) |
 | `max_filesize` | `MAX_FILE_SIZE` | Aborts oversized downloads |
-| `socket_timeout` | `REQUEST_TIMEOUT` | Per-connection timeout |
+| `socket_timeout` | `REQUEST_TIMEOUT` | Per-connection timeout, capped at 30 s |
 | `retries` / `fragment_retries` | `MAX_RETRIES` | Transient failure retries |
-| `audioquality` | `AUDIO_QUALITY` | `best`→0 (VBR), `good`→192k, `medium`→128k |
-| `cookiefile` | `COOKIES_FILE_PATH` | Only set if the file exists; logs a warning if configured but absent |
-| `geo_bypass` | fixed | Enabled |
+| `source_address` | fixed | `0.0.0.0` — forces IPv4 (kept from the original throttling fix, not measured on its own) |
+| `js_runtimes` | fixed | `node`, `deno` — only the full profile's `web` client needs one; the Docker image ships deno. The challenge-solver scripts come from the `yt-dlp-ejs` package, never fetched from GitHub at runtime |
+| `postprocessor_args` | `AUDIO_QUALITY` | Mono 16 kHz mp3: `best`→48k, `good`→32k, `medium`→24k (anything else 32k) |
+| `cookiefile` | `COOKIES_FILE_PATH` | Full profile only. Set only if the file exists; logs a warning if configured but absent |
+
+**Unavailable videos fail loudly.** With `ignore_no_formats_error=True`, a deleted,
+private, or mistyped video used to "succeed" with a made-up title (`youtube video #<id>`)
+and no formats, and that would have gone into Notion as a page. Now it raises
+`This video is unavailable` → `VideoScrapingError` → HTTP 422. The downside: a video that
+has metadata but nothing downloadable (e.g. an upcoming premiere) also fails with 422,
+instead of producing a page built from its title alone.
+
+**Playlist URLs.** `youtube.com/watch?v=X&list=Y` processes video `X`. A bare
+`youtube.com/playlist?list=Y` raises `URL points to a playlist, not a single video` (422).
+
+### Resolved-info cache
+
+`extract_metadata` keeps yt-dlp's resolved info dict in a process-local, in-memory cache
+(module level in `ytdlp_extractor.py`, because extractor instances are created per
+request). The audio pass pops it and downloads with `process_ie_result(info, download=True)`,
+skipping a second extraction:
+
+- **TTL 30 minutes**, at most **16 entries** (LRU). Signed stream URLs expire after ~6 h.
+- **Trimmed before storing** — `automatic_captions`, `subtitles`, `thumbnails`, and
+  `heatmap` are dropped. `automatic_captions` alone is ~11 MB per video; `formats` is ~15 KB.
+- **One-shot** — the entry is removed when used, since yt-dlp mutates it during download.
+- **Fallback** — on a miss, an expired entry, or a failed download from it (e.g. a 403),
+  the audio pass extracts again (fast → full profile) and downloads from that result.
+
+The cache is never written to disk. Stream URLs go stale within hours and embed the
+server's IP. With several uvicorn workers, a hit needs both passes to land in the same
+process. That is always true within one `/process/url` request, not necessarily across
+chat turns.
+
+### Expected yt-dlp warnings
+
+Every YouTube request logs this at WARNING level:
+
+```
+[youtube] <id>: Some android client https formats have been skipped as they are missing
+a URL. YouTube may have enabled the SABR-only streaming experiment for the current
+session. See https://github.com/yt-dlp/yt-dlp/issues/12482 for more details
+```
+
+**This is normal and expected — do not treat it as an error or try to fix it.** YouTube
+serves most `android` formats only over SABR, its own streaming protocol, which yt-dlp
+skips. What's left includes itag 18, the format this service downloads. As long as the
+next log lines show metadata and `Download completed`, nothing is wrong. It only matters
+if it comes with `Requested format is not available` or `No video formats found` — that
+means itag 18 is gone too (see [Troubleshooting](#troubleshooting)).
+
+Other messages that can show up without anything being wrong:
+
+- `Fast yt-dlp extraction failed, retrying with full profile: …` — the fallback working
+  as designed. Only the full profile's failure fails the request.
+- `Download from resolved formats failed, re-extracting: …` — a stale cached stream URL.
+  The audio pass extracts again.
+- yt-dlp's own `ERROR:` lines are logged at WARNING, because the caller logs the raised
+  exception with context, and a fast-profile failure the fallback recovers from shouldn't
+  read as an error.
 
 ### Duration limit
 
@@ -78,9 +177,14 @@ title and description alone.
 
 ### Audio normalisation
 
-Audio lands in `TEMP_DIR/{video_id}.mp3`. If yt-dlp produced webm, m4a, or wav instead,
-`pydub` converts it to mono 16 kHz mp3 and deletes the original. An existing file at that
-path is reused without re-downloading.
+Audio lands in `TEMP_DIR/{video_id}.mp3`, already mono 16 kHz at the `AUDIO_QUALITY`
+bitrate: yt-dlp's `FFmpegExtractAudio` does the transcode. If a non-mp3 file ends up there
+instead (webm, m4a, wav), `pydub` converts it with the same settings and deletes the
+original. An existing file at that path is reused without re-downloading.
+
+Whisper resamples to 16 kHz mono anyway, so a higher bitrate only makes the upload bigger.
+At `best` (48k), a one-hour video is ~22 MB, under Groq's 25 MB file limit. The old
+192 kbps stereo output went over that limit after ~17 minutes.
 
 ## Transcription (Groq Whisper)
 
@@ -256,7 +360,7 @@ For `POST /api/v1/process/url` (via `agents/writer.py`):
 | Step | On failure |
 |---|---|
 | Cache read | Warn, treat as miss |
-| yt-dlp metadata (`fetch_metadata`) | **Aborts** — `VideoScrapingError` → HTTP 422 |
+| yt-dlp metadata (`fetch_metadata`) | **Aborts** — `VideoScrapingError` → HTTP 422, including unavailable videos, videos with no downloadable formats, and playlist URLs |
 | Transcription (`fetch_transcript`) | Logged and swallowed — the page is built with an empty transcript excerpt |
 | Notion mapper agent | **Aborts** — `ContentProcessingError` → HTTP 500 |
 | Notion `create_page` | **Aborts** — `NotionAuthenticationError` → 401, `NotionAPIError` → 503 |
@@ -292,6 +396,22 @@ extraction fails and every video processes without a transcript.
 
 **Video is private or unavailable** — set `COOKIES_FILE_PATH` to a Netscape-format
 cookies file. Instagram, Facebook, and TikTok frequently require this from datacenter IPs.
+On YouTube, cookies only reach the full profile and don't help with audio downloads (see
+[Fast and full profiles](#fast-and-full-profiles)). A genuinely deleted, private, or
+mistyped video fails with HTTP 422 and `This video is unavailable`.
+
+**"Some android client https formats have been skipped … SABR-only streaming"** in the
+logs — expected on every YouTube request; ignore it. See
+[Expected yt-dlp warnings](#expected-yt-dlp-warnings).
+
+**YouTube audio stopped downloading (`Requested format is not available`, `No video formats
+found`, or HTTP 403 on every video)** — itag 18 from the `android` client has probably been
+withdrawn or locked behind a PO Token. Update yt-dlp first (`pip install -U yt-dlp
+yt-dlp-ejs`). If that doesn't help, set up a PO Token provider plugin and add a
+token-capable client (e.g. `mweb`) to the fast profile in `_build_opts`.
+
+**`URL points to a playlist, not a single video`** — the URL is a bare playlist
+(`/playlist?list=…`). Send a single video's watch URL instead. Watch URLs with `&list=` work.
 
 **No transcript on a long video** — a video longer than `MAX_VIDEO_DURATION` skips the audio
 download entirely (`transcript_length: 0`, `transcription_available: false` in the

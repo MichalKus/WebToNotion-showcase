@@ -43,11 +43,11 @@ The service will not work without these four:
 |---|---|---|
 | `MAX_VIDEO_DURATION` | `3600` | Seconds. Longer videos skip audio download and transcription entirely |
 | `MAX_FILE_SIZE` | `500MB` | Accepts `500MB`, `1GB`, `1024KB`, or a raw byte count |
-| `AUDIO_QUALITY` | `best` | `best` (VBR), `good` (192k), `medium` (128k). Anything else falls back to 192k |
-| `COOKIES_FILE_PATH` | unset | Netscape-format cookies for login-gated content. Logs a warning if set but missing |
+| `AUDIO_QUALITY` | `best` | Mono 16 kHz mp3 bitrate for transcription: `best` (48k), `good` (32k), `medium` (24k); anything else 32k. Every level keeps a one-hour video under Groq's 25 MB limit |
+| `COOKIES_FILE_PATH` | unset | Netscape-format cookies for login-gated content. Logs a warning if set but missing. Used only by yt-dlp's full (fallback) profile, never the fast one — see Gotchas |
 | `TEMP_DIR` | `/tmp/webtonotion` | Audio working directory. Created at startup |
 | `CLEANUP_TEMP_FILES` | `true` | Delete audio after transcription, on success and failure |
-| `VERBOSE_LOGGING` | `false` | Passes `verbose` to yt-dlp |
+| `VERBOSE_LOGGING` | `false` | Passes `verbose` to yt-dlp. Its `[debug]` lines go through the app logger at DEBUG level, not to stdout |
 
 ## Caching
 
@@ -66,7 +66,7 @@ The service will not work without these four:
 | `RATE_LIMIT_REQUESTS` | `60` | Per IP per window. `.env.example` ships `100` |
 | `RATE_LIMIT_WINDOW` | `60` | Seconds. `.env.example` ships `3600` |
 | `MAX_CONTENT_LENGTH` | `104857600` | 100 MB request body ceiling |
-| `REQUEST_TIMEOUT` | `300` | Seconds. Applies to the Notion client and yt-dlp sockets |
+| `REQUEST_TIMEOUT` | `300` | Seconds. Applies to the Notion client and yt-dlp sockets (for yt-dlp, capped at 30) |
 | `MAX_RETRIES` | `3` | Shared by yt-dlp, Groq, and all PydanticAI agents |
 
 Rate-limit state is a per-process dictionary. With `WORKERS > 1` the effective limit is
@@ -106,3 +106,11 @@ measured against.
 
 - **`DEBUG=true` in production opens CORS to every origin.** Keep it false outside local
   development.
+- **A logged-in `COOKIES_FILE_PATH` can't be used to download YouTube audio.** An
+  authenticated session makes yt-dlp drop the `android` client, which is the only one that
+  serves a downloadable YouTube format without a PO Token. So cookies are only passed to the
+  full fallback profile, never the fast one. See
+  [video-processing.md](video-processing.md#fast-and-full-profiles).
+- **The yt-dlp "SABR-only streaming" warning is expected.** It shows up on every YouTube
+  request and doesn't mean anything failed. See
+  [video-processing.md](video-processing.md#expected-yt-dlp-warnings).
