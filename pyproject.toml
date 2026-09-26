@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "webtonotion"
-version = "0.5.1"
+version = "0.5.2"
 description = "A FastAPI application to process URLs and create Notion pages using AI agents"
 authors = [
     {name = "Michal Kus", email = "michal@example.com"}
