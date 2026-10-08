@@ -42,8 +42,7 @@ agents/
 
 `save_to_notion` runs the confirm-gate check and then, if the gate is open, calls
 `agents/writer.py` (`build_page_content` → `write_video_page`) — the exact same functions
-`POST /api/v1/process/url` calls. There is one write path, not two — see the
-[design spec](superpowers/specs/2026-08-17-agentic-orchestrator-design.md).
+`POST /api/v1/process/url` calls. There is one write path, not two.
 
 ### Sub-agent layer
 
