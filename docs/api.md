@@ -142,8 +142,8 @@ prompt. Requires `X-API-Key`.
 Once a database is confirmed, `save_to_notion` runs the real write through the shared
 `agents/writer.py` path — the same `build_page_content` + `write_video_page` that backs
 `POST /api/v1/process/url`. See
-[the design spec](superpowers/specs/2026-08-17-agentic-orchestrator-design.md)
-for the full tool belt this surface is built towards.
+[architecture.md](architecture.md#agent-breakdown) for the full tool belt and how the
+sub-agents fit in.
 
 ### Request
 
